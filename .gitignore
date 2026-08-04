@@ -1,0 +1,42 @@
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# ============ 虚拟环境 ============
+.venv/
+venv/
+env/
+ENV/
+
+# ============ 模拟实验输出（可复现，不入库） ============
+results/
+output/
+data/output/
+*.npz
+*.h5
+
+# ============ 测试 / 临时 ============
+.pytest_cache/
+.mypy_cache/
+*.log
+.tmp/
+
+# ============ IDE / 编辑器 ============
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ============ CodeBuddy 项目数据（IDE 元数据） ============
+.codebuddy/
+
+# ============ 系统文件 ============
+.DS_Store
+Thumbs.db
+desktop.ini
