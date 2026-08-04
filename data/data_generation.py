@@ -99,6 +99,17 @@ def save_dataset(data: dict, path: str) -> None:
     np.savez(path, **data)
 
 
+def describe_data(data: dict, label: str = "") -> None:
+    """打印数据集的表结构：字段名、类型、形状、示例值。"""
+    print(f"\n表字段结构 {label}")
+    print(f"  {'字段':<5}{'类型':<10}{'形状':<11}示例值(前3)")
+    print(f"  {'-' * 52}")
+    for key, value in data.items():
+        arr = np.asarray(value)
+        samples = np.array2string(arr[:3], precision=4, separator=", ")
+        print(f"  {key:<5}{str(arr.dtype):<10}{str(arr.shape):<11}{samples}")
+
+
 if __name__ == "__main__":
     cfg = load_config()
     seed = cfg["experiment"]["random_seed"]
@@ -111,9 +122,13 @@ if __name__ == "__main__":
     print(f"  分位数公式: {[q['formula'] for q in cfg['design']['quantile_levels']]}")
     print("=" * 72)
 
+    first_data = True
     for model in cfg["outcome_models"]:
         for n in cfg["design"]["sample_sizes"]:
             data = generate_dataset(cfg, model, n, seed)
+            if first_data:
+                describe_data(data, label=f"[{model}] n={n}")
+                first_data = False
             n1, n0 = int((data["D"] == 1).sum()), int((data["D"] == 0).sum())
 
             print(f"\n[{model}] n={n}")
