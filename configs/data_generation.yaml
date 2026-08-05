@@ -114,5 +114,12 @@ design:
     - name: "beta_n"
       formula: "n ** (-0.65)"
 
-  # 完整因子设计：3 模型 x 3 样本量 x 3 分位数 = 27 个场景
-  full_factorial: true
+  # Monte Carlo 重复次数：每个场景独立重复生成样本并估计
+  replications: 1000
+
+  # 结果平移量 shift 列表：对生成数据的结果 Y 统一加 shift 后估计 EVI，
+  # 每个 shift 得到一个 MSE，用于考察估计量对位置平移的敏感性
+  shifts: [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0]
+
+  # 并行 worker 进程数（ProcessPoolExecutor 的 max_workers）。
+  num_workers: 10
