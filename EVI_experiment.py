@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-"""EVI 估计量平移敏感性 Monte Carlo 实验：shift -> MSE 折线图。
+"""EVI 估计量平移敏感性 Monte Carlo 实验：relative shift -> MSE 折线图。
+
+平移采用相对尺度: 实际平移量 c = lambda · q_{Y1}(1-α_n)（与 QTE_experiment 一致），
+配置 shifts 中的值是相对比例 λ，避免绝对平移在不同模型间不可比。
 
 流程：
-  1. 对每个模型 / 样本量 / shift，依配置生成数据，并把结果指标 Y 统一平移 +shift；
+  1. 对每个模型 / 样本量 / λ，依配置生成数据，并把结果指标 Y 统一平移 +λ·q_{Y1}(1-α_n)；
   2. 分别用 Causal Fraga 与 Causal Hill 估计量估计处理组/对照组 EVI；
-  3. 重复 R 次，对每个估计量计算相对真值的 MSE（一个 shift 对应一个 MSE）；
-  4. 画 fraga / hill 折线图：横轴 shift，纵轴 MSE。
+  3. 重复 R 次，对每个估计量计算相对真值的 MSE（一个 λ 对应一个 MSE）；
+  4. 画 fraga / hill 折线图：横轴 λ，纵轴 MSE。
 
 CLI 参数（均可选，默认读配置文件）：
   --replications R        重复次数，如 --replications 500
@@ -38,8 +41,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "data"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "estimate"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "EVI"))
 
-from data_generation import load_config, generate_dataset  # noqa: E402
+from data_generation import load_config, generate_dataset, tau_levels  # noqa: E402
 from estimate_propensity_sieve import estimate_propensity_sieve  # noqa: E402
+from estimate_quantile_real import real_quantile  # noqa: E402
 from causal_fraga import estimate_evi_for_config as fraga_for_config  # noqa: E402
 from causal_hill import estimate_evi_for_config as hill_for_config  # noqa: E402
 
@@ -52,8 +56,14 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
     筛方法倾向得分只依赖 X、D，与结果 Y（及 shift）无关，因此每个重复只做
     一次数据生成 + 倾向得分估计，然后对所有 shift 复用 pi_estimate 计算 EVI。
 
-    返回 {shift: {estimator: {group: np.ndarray}}}。
+    平移采用相对尺度: 实际平移量 c = lambda · q_{Y1}(1-α_n)（与 QTE_experiment 一致），
+    shifts 列表中的值是相对比例 λ。
+
+    返回 {λ: {estimator: {group: np.ndarray}}}。
     """
+    alpha_n = dict(tau_levels(cfg, n))["alpha_n"]
+    scale = real_quantile(cfg, model, 1, 1.0 - alpha_n)  # 处理组锚点理论分位数
+
     results = {s: {name: {"gamma_treated": [], "gamma_control": []}
                    for name in ESTIMATORS} for s in shifts}
     for rep in range(replications):
@@ -63,7 +73,7 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
         base_Y = np.asarray(data["Y"])
         for s in shifts:
             data_s = dict(data)                 # 浅拷贝，仅替换 Y 字段
-            data_s["Y"] = base_Y + s            # 结果指标统一平移
+            data_s["Y"] = base_Y + s * scale    # 相对平移 c = λ · q_{Y1}(1-α_n)
             for name, fn in ESTIMATORS.items():
                 res = fn(cfg, data_s, n)
                 results[s][name]["gamma_treated"].append(res["gamma_treated"])
@@ -122,7 +132,7 @@ def plot_shift_lines(mse_by, theory, models, sample_sizes, shifts, out_dir):
                     vals = [mse_by[model][n][name][group][s] for s in shifts]
                     ax.plot(shifts, vals, marker="o", linewidth=1.8, linestyle="-",
                             label=est_labels[name], color=colors[name])
-                ax.set_xlabel("global shift c")
+                ax.set_xlabel("relative shift λ")
                 ax.set_ylabel("MSE")
                 ax.set_title(f"{model} (n = {n}, {label} = {truth:.3f})")
                 ax.grid(alpha=0.3)
@@ -166,7 +176,7 @@ if __name__ == "__main__":
     print("  （并行粒度：模型 x 样本量组合，每个组合一个进程）")
     print(f"  模型: {models}")
     print(f"  样本量列表: {sample_sizes}")
-    print(f"  平移量列表: {shifts}")
+    print(f"  相对平移比例 λ 列表: {shifts}")
     print(f"  重复次数 R = {replications}")
     print("=" * 72)
 
