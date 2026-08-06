@@ -8,8 +8,9 @@ Causal Fraga 与 Causal Hill 的 EVI（处理组/对照组），绘制 EVI 估�
 
 估计设置：
   - Hill  : estimate_evi_causal_hill(data, alpha_n)，α_n = k/n
-  - Fraga : estimate_evi_causal_fraga(data, beta_n, alpha_n)，
-            β_n = k^(2/3)/n（统一辅助水平，随 k 变化）
+  - Fraga : k0 随 k 变化的自适应估计——estimate_k0_by_group(cfg, data, n, k)
+            得到分组 β_t/β_c（k0 = k^m，k = n·α_n），再
+            estimate_evi_causal_fraga(data, beta_fb, alpha_n, beta_t, beta_c)
 
 每个模型一张图（仅 EVI 估计量）：行 = 样本量 n、列 = 组 (γ1/γ0)，
 子图横轴 = k（在 (0, kmax] 等距取 6 个点），纵轴 = EVI 估计量，
@@ -46,6 +47,7 @@ for _sub in ("data", "estimate", "EVI"):
 
 from data_generation import load_config, generate_dataset, tau_levels  # noqa: E402
 from estimate_propensity_sieve import estimate_propensity_sieve  # noqa: E402
+from estimate_k0 import estimate_k0_by_group, fallback_beta  # noqa: E402
 from causal_fraga import estimate_evi_causal_fraga  # noqa: E402
 from causal_hill import estimate_evi_causal_hill  # noqa: E402
 
@@ -65,14 +67,16 @@ def default_k_grid(cfg, n):
     return np.linspace(k_min, k_max, 10)
 
 
-def estimate_evi_by_method(data, k, n):
+def estimate_evi_by_method(cfg, data, k, n):
     """给定 k（top observations），估计各方法的 EVI（处理组/对照组）。
 
+    cfg : 实验配置（k0 自适应估计用）
     data: 含 Y, D, pi_estimate 的数据 dict
+    k   : 中间水平 top-k 观测数（α_n = k/n，Fraga 的 k0 也随 k 自适应）
     返回 {estimator: {group: gamma}}（估计失败可为 nan）。
     """
     alpha_n = float(k) / n                 # 中间水平锚点
-    beta_n = float(k) ** (2.0 / 3.0) / n   # Fraga 辅助水平（随 k 变化）
+    beta_fb = fallback_beta(cfg, n)        # Fraga 兜底辅助水平
     out = {}
     try:
         h = estimate_evi_causal_hill(data, alpha_n)
@@ -81,7 +85,13 @@ def estimate_evi_by_method(data, k, n):
     except Exception:
         out["hill"] = {"gamma_treated": np.nan, "gamma_control": np.nan}
     try:
-        f = estimate_evi_causal_fraga(data, beta_n, alpha_n)
+        # Fraga 的 k0 随 k 变化：分组自适应估计 β_n（k0 = k^m，k = n·α_n）
+        k0res = estimate_k0_by_group(cfg, data, n, k=k)
+        beta_t = k0res["beta_treated"]
+        beta_c = k0res["beta_control"]
+        f = estimate_evi_causal_fraga(data, beta_fb, alpha_n,
+                                      beta_treated=beta_t,
+                                      beta_control=beta_c)
         out["fraga"] = {"gamma_treated": f["gamma_treated"],
                         "gamma_control": f["gamma_control"]}
     except Exception:
@@ -101,7 +111,7 @@ def run_experiment(cfg, model, n, k_grid, replications, base_seed):
         data = generate_dataset(cfg, model, n, seed)
         data, _h_n, _info = estimate_propensity_sieve(data)
         for k in k_grid:
-            est = estimate_evi_by_method(data, k, n)
+            est = estimate_evi_by_method(cfg, data, k, n)
             for g in GROUPS:
                 for name in ESTIMATORS:
                     results[g][k][name].append(est[name][g])
@@ -154,7 +164,7 @@ def plot_k_curves(all_results, truth_by_n, model, sample_sizes, k_grid_by_n,
                 ax.yaxis.set_label_position("right")
     # 最外层横纵坐标说明
     fig.supxlabel("k-number of top observations", fontsize=13, y=0.04)
-    fig.supylabel("EVI estimate", fontsize=13, x=0.05)
+    fig.supylabel("mean of EVI estimates", fontsize=13, x=0.05)
     handles = [plt.Line2D([0], [0], color=COLORS[name], label=LABELS[name])
                for name in ESTIMATORS]
     handles.append(plt.Line2D([0], [0], color="black", linestyle="--",

@@ -47,11 +47,14 @@ def fallback_beta(cfg, n):
     return float(k0_init_star(cfg, n)) / n
 
 
-def estimate_k0_by_group(cfg, data, n):
+def estimate_k0_by_group(cfg, data, n, k=None):
     """基于含 pi_estimate 的数据，估计处理组/对照组各自的 m、k0 与 β_n。
 
     data: 生成的数据 dict（需已含 pi_estimate 字段）
     n   : 样本量
+    k   : 可选，指定中间水平 top-k 观测数（k 敏感性分析用，缺省取配置
+          k = n·α_n = n^{0.65}）。传入 k 时 α_n = k/n、k0* = k^{2/3}，
+          k0 = k^m 自适应估计随该 k 变化。
 
     某组 γ̂ 估计失败时，该组的 m/k0 为 nan、β_n 回退到 fallback_beta(cfg, n)。
 
@@ -59,9 +62,14 @@ def estimate_k0_by_group(cfg, data, n):
               m_treated, m_control, k0_treated, k0_control,
               beta_treated, beta_control}。
     """
-    alpha_n = dict(tau_levels(cfg, n))["alpha_n"]
-    k = n * alpha_n                      # k = n^{0.65}
-    k0_star = float(k0_init_star(cfg, n))
+    if k is None:
+        alpha_n = dict(tau_levels(cfg, n))["alpha_n"]
+        k = n * alpha_n                  # k = n^{0.65}
+        k0_star = float(k0_init_star(cfg, n))
+    else:
+        k = float(k)
+        alpha_n = k / n
+        k0_star = float(k) ** (2.0 / 3.0)   # 随 k 变化：k0* = k^{2/3}
     sigma = float(cfg["design"]["k0_sigma"])
     m_lower = float(cfg["design"].get("k0_m_lower", 0.05))   # m 下界兜底
     beta_star = k0_star / n
