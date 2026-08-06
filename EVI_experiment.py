@@ -44,10 +44,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "EVI"))
 from data_generation import load_config, generate_dataset, tau_levels  # noqa: E402
 from estimate_propensity_sieve import estimate_propensity_sieve  # noqa: E402
 from estimate_quantile_real import real_quantile  # noqa: E402
-from causal_fraga import estimate_evi_for_config as fraga_for_config  # noqa: E402
+from causal_fraga import estimate_evi_causal_fraga  # noqa: E402
 from causal_hill import estimate_evi_for_config as hill_for_config  # noqa: E402
+from estimate_k0 import estimate_k0_by_group, fallback_beta  # noqa: E402
 
-ESTIMATORS = {"fraga": fraga_for_config, "hill": hill_for_config}
+ESTIMATORS = ("fraga", "hill")
 
 
 def run_experiment(cfg, model, n, shifts, replications, base_seed):
@@ -56,12 +57,16 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
     筛方法倾向得分只依赖 X、D，与结果 Y（及 shift）无关，因此每个重复只做
     一次数据生成 + 倾向得分估计，然后对所有 shift 复用 pi_estimate 计算 EVI。
 
+    Fraga 估计量使用自适应 k0（k0 = k^m）：对每个 (模型, n) 的处理组/对照组
+    分别估计 k0（不取统一值），对应各自的 β_n。Hill 估计量锚点 α_n 不变。
+
     平移采用相对尺度: 实际平移量 c = lambda · q_{Y1}(1-α_n)（与 QTE_experiment 一致），
     shifts 列表中的值是相对比例 λ。
 
     返回 {λ: {estimator: {group: np.ndarray}}}。
     """
     alpha_n = dict(tau_levels(cfg, n))["alpha_n"]
+    beta_fb = fallback_beta(cfg, n)   # 兜底 β_n（自适应失败时回退；分组值优先）
     scale = real_quantile(cfg, model, 1, 1.0 - alpha_n)  # 处理组锚点理论分位数
 
     results = {s: {name: {"gamma_treated": [], "gamma_control": []}
@@ -71,13 +76,18 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
         data = generate_dataset(cfg, model, n, seed)
         data, _h_n, _info = estimate_propensity_sieve(data)
         base_Y = np.asarray(data["Y"])
+        # 分组 k0：处理组/对照组各自的 β_n（Fraga 对平移不变，用未平移数据估计即可）
+        k0res = estimate_k0_by_group(cfg, data, n)
+        beta_t, beta_c = k0res["beta_treated"], k0res["beta_control"]
         for s in shifts:
             data_s = dict(data)                 # 浅拷贝，仅替换 Y 字段
             data_s["Y"] = base_Y + s * scale    # 相对平移 c = λ · q_{Y1}(1-α_n)
-            for name, fn in ESTIMATORS.items():
-                res = fn(cfg, data_s, n)
-                results[s][name]["gamma_treated"].append(res["gamma_treated"])
-                results[s][name]["gamma_control"].append(res["gamma_control"])
+            # Fraga（分组 β_n，兜底 beta_fb）与 Hill（统一 α_n）
+            res_f = estimate_evi_causal_fraga(data_s, beta_fb, alpha_n, beta_t, beta_c)
+            res_h = hill_for_config(cfg, data_s, n)
+            for tag, res in (("fraga", res_f), ("hill", res_h)):
+                results[s][tag]["gamma_treated"].append(res["gamma_treated"])
+                results[s][tag]["gamma_control"].append(res["gamma_control"])
     for s in shifts:
         for name in ESTIMATORS:
             for group in ("gamma_treated", "gamma_control"):

@@ -62,6 +62,7 @@ from Deuber import estimate_qte_extrapolation  # noqa: E402
 from QTE_Fraga import estimate_qte_extrapolation_fraga  # noqa: E402
 from QTE_Fraga_diff import estimate_qte_diff_fraga  # noqa: E402
 from QTE_real import real_qte  # noqa: E402
+from estimate_k0 import estimate_k0_by_group, fallback_beta  # noqa: E402
 
 METHODS = ["Zhang", "Deuber", "Fraga_alpha", "Fraga_diff"]
 COLORS = {
@@ -78,19 +79,24 @@ LABELS = {
 }
 
 
-def estimate_qte_by_method(data_s, tau, alpha_n, beta_n):
+def estimate_qte_by_method(data_s, tau, alpha_n, beta_n,
+                           beta_treated=None, beta_control=None):
     """各方法估计分位数水平 1-tau 处的 QTE（tau 为上尾概率）。
 
-    data_s: 平移后的数据 dict（含 Y, D, pi_estimate）
+    data_s      : 平移后的数据 dict（含 Y, D, pi_estimate）
+    beta_treated: 可选，处理组自适应 k0 对应的 β_n（Fraga 系列使用）
+    beta_control: 可选，对照组自适应 k0 对应的 β_n（Fraga 系列使用）
     返回 {method: qte}。
     """
     return {
         "Zhang": estimate_qte(data_s, 1.0 - tau)["qte"],
         "Deuber": estimate_qte_extrapolation(data_s, alpha_n, tau)["qte_ext"],
         "Fraga_alpha": estimate_qte_extrapolation_fraga(
-            data_s, beta_n, alpha_n, tau)["qte_ext"],
+            data_s, beta_n, alpha_n, tau,
+            beta_treated=beta_treated, beta_control=beta_control)["qte_ext"],
         "Fraga_diff": estimate_qte_diff_fraga(
-            data_s, alpha_n, beta_n, tau)["qte_ext"],
+            data_s, alpha_n, beta_n, tau,
+            beta_treated=beta_treated, beta_control=beta_control)["qte_ext"],
     }
 
 
@@ -99,6 +105,10 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
 
     筛方法倾向得分只依赖 X、D，与结果 Y（及 shift）无关，因此每个重复只做
     一次数据生成 + 倾向得分估计，然后对所有 shift 复用 pi_estimate 计算 QTE。
+
+    Fraga 系列（Fraga_alpha / Fraga_diff）使用自适应 k0（k0 = k^m）：对每个
+    (模型, n) 的处理组/对照组分别估计 k0（不取统一值），对应各自的 β_n；
+    Zhang / Deuber（Hill）不受影响。
 
     平移采用相对尺度: 实际平移量 c = lambda · q_{Y1}(1-α_n)，即 shifts 列表
     中的值是相对比例 λ，与分布自身尾部位置成比例，避免绝对平移在不同模型间
@@ -112,7 +122,7 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
     levels = dict(tau_levels(cfg, n))
     tau_names = [name for name in levels if name.startswith("tau_n")]
     alpha_n = levels["alpha_n"]
-    beta_n = levels["beta_n"]
+    beta_fb = fallback_beta(cfg, n)   # 兜底 β_n（自适应失败时回退；分组值优先）
     tau_vals = {name: levels[name] for name in tau_names}
     truth_by = {name: real_qte(cfg, model, 1.0 - levels[name])["qte"]
                 for name in tau_names}
@@ -127,11 +137,16 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
         data = generate_dataset(cfg, model, n, seed)
         data, _h_n, _info = estimate_propensity_sieve(data)
         base_Y = np.asarray(data["Y"])
+        # 分组 k0：处理组/对照组各自的 β_n（Fraga 对平移不变，用未平移数据估计即可）
+        k0res = estimate_k0_by_group(cfg, data, n)
+        beta_t = k0res["beta_treated"]
+        beta_c = k0res["beta_control"]
         for s in shifts:
             data_s = dict(data)                 # 浅拷贝，仅替换 Y 字段
             data_s["Y"] = base_Y + s * scale    # 相对平移 c = λ · q_{Y1}(1-α_n)
             for name in tau_names:
-                est = estimate_qte_by_method(data_s, levels[name], alpha_n, beta_n)
+                est = estimate_qte_by_method(data_s, levels[name], alpha_n, beta_fb,
+                                             beta_t, beta_c)
                 for m in METHODS:
                     results[name][s][m].append(est[m])
     for name in tau_names:

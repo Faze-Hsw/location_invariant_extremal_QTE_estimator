@@ -110,9 +110,14 @@ design:
     # 中间分位数水平 α_n = k/n，其中 k = n^{0.65}（等价写法 α_n = n^{-0.35}）
     - name: "alpha_n"
       formula: "n ** 0.65 / n"
-    # 辅助分位数水平 β_n = k0/n，其中 k0 = n^{0.43}（等价写法 β_n = n^{-0.57}）
-    - name: "beta_n"
-      formula: "n ** 0.43 / n"
+
+  # k0 自适应估计超参数（k0 = k^m，取代手动指定 k0）：
+  #   k0_init_formula: 初始取定的 k0* 公式（默认 2·k^{2/3}，k = n^{0.65} 来自 alpha_n）
+  #   k0_sigma:        m = m* - σ 中的 σ
+  #   k0_m_lower:      m 的下界兜底值（m* - σ < 该值时取该值）
+  k0_init_formula: "2 * (n ** 0.65) ** (2 / 3)"
+  k0_sigma: 0.001
+  k0_m_lower: 0.05
 
   # Monte Carlo 重复次数：每个场景独立重复生成样本并估计
   replications: 1000

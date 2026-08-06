@@ -22,7 +22,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "EVI"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from causal_fraga import estimate_evi_causal_fraga  # noqa: E402
+from estimate_k0 import fallback_beta  # noqa: E402
 
 
 def weighted_quantile(Y, weights, tau):
@@ -50,16 +52,19 @@ def extrapolate_quantile(q_anchor, anchor, tau_target, gamma):
     return q_anchor * (anchor / tau_target) ** gamma
 
 
-def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=None):
+def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=None,
+                                     beta_treated=None, beta_control=None):
     """外推法估计极端分位数处理效应（Fraga 极值指数版，锚点 α_n）。
 
-    data      : dict，需含 Y, D, pi_estimate 三个一维字段
-    beta_n    : Fraga 估计量的辅助中间水平（构造阈值差，需 beta_n < alpha_n）
-    alpha_n   : 锚点中间水平（上尾概率），锚点分位数为 q̂_j(1-α_n)
-    tau_target: 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
-                一般用于 tau_target < alpha_n（向比锚点更极端的尾部外推）
-    gamma     : 可选的极值指数 dict {gamma_treated, gamma_control}；
-                缺省时用 Candal–Fraga 估计量（estimate_evi_causal_fraga）计算
+    data          : dict，需含 Y, D, pi_estimate 三个一维字段
+    beta_n        : Fraga 估计量的辅助中间水平（构造阈值差，需 beta_n < alpha_n）
+    alpha_n       : 锚点中间水平（上尾概率），锚点分位数为 q̂_j(1-α_n)
+    tau_target    : 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
+                    一般用于 tau_target < alpha_n（向比锚点更极端的尾部外推）
+    gamma         : 可选的极值指数 dict {gamma_treated, gamma_control}；
+                    缺省时用 Candal–Fraga 估计量（estimate_evi_causal_fraga）计算
+    beta_treated  : 可选，处理组各自的 β_n（分组 k0 时传入）
+    beta_control  : 可选，对照组各自的 β_n（分组 k0 时传入）
 
     返回 dict {beta_n, alpha_n, tau, q_anchor_treated, q_anchor_control,
               gamma_treated, gamma_control,
@@ -84,9 +89,10 @@ def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=No
     q_anchor_t = weighted_quantile(Y[mask_t], w_t, 1.0 - alpha_n)
     q_anchor_c = weighted_quantile(Y[mask_c], w_c, 1.0 - alpha_n)
 
-    # 极值指数：缺省用 Candal–Fraga
+    # 极值指数：缺省用 Candal–Fraga（可分组 β_n）
     if gamma is None:
-        fraga = estimate_evi_causal_fraga(data, beta_n, alpha_n)
+        fraga = estimate_evi_causal_fraga(data, beta_n, alpha_n,
+                                          beta_treated, beta_control)
         gamma_t = fraga["gamma_treated"]
         gamma_c = fraga["gamma_control"]
     else:
@@ -129,8 +135,8 @@ if __name__ == "__main__":
 
     # 锚点水平 β_n 与辅助水平 α_n 取自配置；目标极端水平 τ 取自配置中所有 tau_n_* 水平
     levels = dict(tau_levels(cfg, first_n))
-    beta_n = levels["beta_n"]
     alpha_n = levels["alpha_n"]
+    beta_n = fallback_beta(cfg, first_n)   # 兜底 β_n（辅助水平）
     target_levels = [(name, levels[name]) for name in levels if name.startswith("tau_n")]
     target_taus = [t for _, t in target_levels]
 

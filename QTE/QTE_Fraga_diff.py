@@ -23,7 +23,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "EVI"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from causal_fraga import estimate_evi_causal_fraga  # noqa: E402
+from estimate_k0 import fallback_beta  # noqa: E402
 
 
 def weighted_quantile(Y, weights, tau):
@@ -60,16 +62,19 @@ def difference_extrapolate(q_alpha, q_beta, alpha_n, beta_n, tau_target, gamma):
     return q_alpha + (q_beta - q_alpha) * slope
 
 
-def estimate_qte_diff_fraga(data, alpha_n, beta_n, tau_target, gamma=None):
+def estimate_qte_diff_fraga(data, alpha_n, beta_n, tau_target, gamma=None,
+                            beta_treated=None, beta_control=None):
     """差分外推法估计极端分位数处理效应（Fraga 极值指数版）。
 
-    data      : dict，需含 Y, D, pi_estimate 三个一维字段
-    alpha_n   : 锚点水平一（中间，上尾概率），锚点分位数为 q̂_j(1-α_n)
-    beta_n    : 锚点水平二（更深，上尾概率，需 beta_n < alpha_n），锚点分位数为 q̂_j(1-β_n)
-    tau_target: 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
-                一般用于 tau_target < beta_n（外推到比两锚点更极端的尾部）
-    gamma     : 可选的极值指数 dict {gamma_treated, gamma_control}；
-                缺省时用 Candal–Fraga 估计量（estimate_evi_causal_fraga）计算
+    data          : dict，需含 Y, D, pi_estimate 三个一维字段
+    alpha_n       : 锚点水平一（中间，上尾概率），锚点分位数为 q̂_j(1-α_n)
+    beta_n        : 锚点水平二（更深，上尾概率，需 beta_n < alpha_n），锚点分位数为 q̂_j(1-β_n)
+    tau_target    : 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
+                    一般用于 tau_target < beta_n（外推到比两锚点更极端的尾部）
+    gamma         : 可选的极值指数 dict {gamma_treated, gamma_control}；
+                    缺省时用 Candal–Fraga 估计量（estimate_evi_causal_fraga）计算
+    beta_treated  : 可选，处理组各自的 β_n（分组 k0 时传入，锚点 q̂_j(1-β) 也分组）
+    beta_control  : 可选，对照组各自的 β_n（分组 k0 时传入）
 
     返回 dict {alpha_n, beta_n, tau, q_anchor_alpha_treated, q_anchor_alpha_control,
               q_anchor_beta_treated, q_anchor_beta_control,
@@ -83,7 +88,9 @@ def estimate_qte_diff_fraga(data, alpha_n, beta_n, tau_target, gamma=None):
     taus = np.atleast_1d(np.asarray(tau_target, dtype=float))
     if np.any(taus <= 0):
         raise ValueError("tau_target 需为正（tau > 0）")
-    if not (0.0 < beta_n < alpha_n):
+    beta_t = float(beta_treated) if beta_treated is not None else float(beta_n)
+    beta_c = float(beta_control) if beta_control is not None else float(beta_n)
+    if not (0.0 < beta_t < alpha_n) or not (0.0 < beta_c < alpha_n):
         raise ValueError("需满足 0 < beta_n < alpha_n")
 
     eps = 1e-6
@@ -94,15 +101,16 @@ def estimate_qte_diff_fraga(data, alpha_n, beta_n, tau_target, gamma=None):
     w_t = 1.0 / pi_c[mask_t]
     w_c = 1.0 / (1.0 - pi_c[mask_c])
 
-    # 两个锚点中间水平分位数（IPW 加权）
+    # 两个锚点中间水平分位数（IPW 加权；β 锚点按组取 q̂_j(1-β_j)）
     q_alpha_t = weighted_quantile(Y[mask_t], w_t, 1.0 - alpha_n)
     q_alpha_c = weighted_quantile(Y[mask_c], w_c, 1.0 - alpha_n)
-    q_beta_t = weighted_quantile(Y[mask_t], w_t, 1.0 - beta_n)
-    q_beta_c = weighted_quantile(Y[mask_c], w_c, 1.0 - beta_n)
+    q_beta_t = weighted_quantile(Y[mask_t], w_t, 1.0 - beta_t)
+    q_beta_c = weighted_quantile(Y[mask_c], w_c, 1.0 - beta_c)
 
-    # 极值指数：缺省用 Candal–Fraga
+    # 极值指数：缺省用 Candal–Fraga（可分组 β_n）
     if gamma is None:
-        fraga = estimate_evi_causal_fraga(data, beta_n, alpha_n)
+        fraga = estimate_evi_causal_fraga(data, beta_n, alpha_n,
+                                          beta_treated, beta_control)
         gamma_t = fraga["gamma_treated"]
         gamma_c = fraga["gamma_control"]
     else:
@@ -110,9 +118,9 @@ def estimate_qte_diff_fraga(data, alpha_n, beta_n, tau_target, gamma=None):
         gamma_c = float(gamma["gamma_control"])
 
     q_ext_t = np.array([difference_extrapolate(
-        q_alpha_t, q_beta_t, alpha_n, beta_n, t, gamma_t) for t in taus])
+        q_alpha_t, q_beta_t, alpha_n, beta_t, t, gamma_t) for t in taus])
     q_ext_c = np.array([difference_extrapolate(
-        q_alpha_c, q_beta_c, alpha_n, beta_n, t, gamma_c) for t in taus])
+        q_alpha_c, q_beta_c, alpha_n, beta_c, t, gamma_c) for t in taus])
     qte_ext = q_ext_t - q_ext_c
 
     def _scalar_or_array(arr):
@@ -148,7 +156,7 @@ if __name__ == "__main__":
     # 锚点水平 α_n、β_n 取自配置；目标极端水平 τ 取自配置中所有 tau_n_* 水平
     levels = dict(tau_levels(cfg, first_n))
     alpha_n = levels["alpha_n"]
-    beta_n = levels["beta_n"]
+    beta_n = fallback_beta(cfg, first_n)   # 兜底 β_n（锚点水平二）
     target_levels = [(name, levels[name]) for name in levels if name.startswith("tau_n")]
     target_taus = [t for _, t in target_levels]
 
