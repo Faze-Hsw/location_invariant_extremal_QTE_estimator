@@ -245,13 +245,13 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                     ax.set_ylabel(f"n = {n}", fontsize=11)
                     ax.yaxis.set_label_position("right")
         # 最外层横纵坐标说明
-        fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
+        fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.08)
         fig.supylabel("Squared Error", fontsize=13)
         handles = [Patch(facecolor=COLORS[m], label=LABELS[m]) for m in METHODS]
         fig.legend(handles=handles, loc="upper center", ncol=len(METHODS),
                    fontsize=10, frameon=False)
         # suptitle 下移，避免与顶部图例重合
-        fig.suptitle(model, fontsize=13, y=0.93)
+        fig.suptitle(model, fontsize=13, y=0.90)
         fig.tight_layout(rect=(0, 0.04, 1, 0.94))
 
         out_path = out_dir / f"QTE_shift_{model}.png"

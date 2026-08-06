@@ -115,13 +115,13 @@ design:
   #   k0_init_formula: 初始取定的 k0* 公式（默认 2·k^{2/3}，k = n^{0.65} 来自 alpha_n）
   #   k0_sigma:        m = m* - σ 中的 σ
   #   k0_m_lower:      m 的下界兜底值（m* - σ < 该值时取该值）
-  k0_init_formula: "(n ** 0.65) ** (2 / 3)"
-  k0_sigma: 0.001
-  k0_m_lower: 0.05
+  k0_init_formula: "2*(n ** 0.65) ** (2 / 3)"
+  k0_sigma: 0.05
+  k0_m_lower: 0.1
   # Deuber_diff 的固定 k0 公式（k0 = k^(2/3)，k = n^0.65 来自 alpha_n）：
   # 统一取 k0_deuber_diff = (n*alpha_n)^(2/3)，不随 Fraga 分组自适应估计；
   # β_n^deuber_diff = k0_deuber_diff / n（运行时代入具体 n）
-  k0_deuber_diff_formula: "(n ** 0.65) ** (2 / 3)"
+  k0_deuber_diff_formula: "2*(n ** 0.65) ** (2 / 3)"
 
   # Monte Carlo 重复次数：每个场景独立重复生成样本并估计
   replications: 1000
@@ -130,7 +130,7 @@ design:
   # 真实 QTE = q_{Y1+μ}(τ) - q_{Y0+μ}(τ) 平移不变，不随 μ 变化；每个 μ 得到一个
   # MSE，用于考察估计量对位置变化的敏感性。取值需按各模型分布尺度设定。
   # （默认 μ=0 由代码缺省处理，实验时 shifts 覆盖）
-  shifts: [0,10,100,1000]
+  shifts: [0,10,20,30,40,50]
 
   # 并行 worker 进程数（ProcessPoolExecutor 的 max_workers）。
   num_workers: 10

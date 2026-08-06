@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""EVI 估计量位置敏感性 Monte Carlo 实验：mu -> MSE 折线图。
+"""EVI 估计量位置敏感性 Monte Carlo 实验：mu -> EVI 估计量箱线图。
 
 横坐标为共享位置偏移 μ（模型层外加 Y(j) = μ + 原分布，H1/H2/H3 一致）；
 真实 EVI 是平移不变量，不随 μ 变化。
@@ -7,8 +7,10 @@
 流程：
   1. 对每个模型 / 样本量 / μ，依配置生成不同位置分布的样本；
   2. 分别用 Causal Fraga 与 Causal Hill 估计量估计处理组/对照组 EVI；
-  3. 重复 R 次，对每个估计量计算相对真值的 MSE（一个 μ 对应一个 MSE）；
-  4. 画 fraga / hill 折线图：横轴 μ，纵轴 MSE。
+  3. 重复 R 次，收集每个估计量的估计值；
+  4. 画 EVI 估计量箱线图：一个模型一张图，行 = 样本量 n、列 = 组 (γ1/γ0)，
+     子图内横轴 μ、纵轴 EVI 估计量（线性刻度），每个 μ 处 fraga/hill
+     各一个箱线图，并画真实 EVI 水平参考线。
 
 CLI 参数（均可选，默认读配置文件）：
   --replications R        重复次数，如 --replications 500
@@ -96,33 +98,17 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
     return results
 
 
-def mse(values, truth):
-    """估计值与真值的均方误差（忽略 nan）。"""
-    v = values[np.isfinite(values)]
-    if v.size == 0:
-        return np.nan
-    return float(np.mean((v - truth) ** 2))
-
-
-def summarize(values, truth):
-    """返回 (mean, bias, std, rmse, n_valid)。"""
-    v = values[np.isfinite(values)]
-    if v.size == 0:
-        return np.nan, np.nan, np.nan, np.nan, 0
-    mean = v.mean()
-    bias = mean - truth
-    std = v.std(ddof=1)
-    rmse = np.sqrt(np.mean((v - truth) ** 2))
-    return mean, bias, std, rmse, v.size
-
-
-def plot_shift_lines(mse_by, theory, models, sample_sizes, shifts, out_dir):
-    """每个 (模型, 样本量) 一张折线图：两子图（gamma_1 / gamma_0），
-    横轴 shift，纵轴 MSE，两条线分别对应 fraga / hill。"""
+def plot_shift_boxplots(all_results, theory, models, sample_sizes, shifts, out_dir):
+    """每个模型一张图：行 = 样本量 n，列 = 组 (γ1/γ0)。
+    子图内横轴 μ、纵轴 EVI 估计量（线性刻度），
+    每个 μ 处 fraga / hill 各一个箱线图（展示 R 次重复的估计分布），
+    并画真实 EVI 水平参考线。
+    横纵坐标说明（location shift / EVI estimate）放在图的最外层。"""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
     except ImportError as e:
         print(f"[Warning] matplotlib unavailable, skip plotting: {e}")
         return
@@ -132,29 +118,62 @@ def plot_shift_lines(mse_by, theory, models, sample_sizes, shifts, out_dir):
     est_labels = {"fraga": "Causal Fraga", "hill": "Causal Hill"}
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    n_est = len(est_names)
+    width = 0.8 / n_est
+    n_n = len(sample_sizes)
+    groups = ("gamma_treated", "gamma_control")
     for model in models:
-        for n in sample_sizes:
-            fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-            for c, group in enumerate(("gamma_treated", "gamma_control")):
-                ax = axes[c]
+        fig, axes = plt.subplots(n_n, len(groups), figsize=(4.6 * len(groups), 3.6 * n_n),
+                                 squeeze=False)
+        for r, n in enumerate(sample_sizes):
+            for c, group in enumerate(groups):
+                ax = axes[r][c]
                 label = "γ₁" if group == "gamma_treated" else "γ₀"
                 truth = theory[model]["gamma_1"] if group == "gamma_treated" else theory[model]["gamma_0"]
-                for name in est_names:
-                    vals = [mse_by[model][n][name][group][s] for s in shifts]
-                    ax.plot(shifts, vals, marker="o", linewidth=1.8, linestyle="-",
-                            label=est_labels[name], color=colors[name])
-                ax.set_xlabel(r"location shift $\mu$")
-                ax.set_ylabel("MSE")
-                ax.set_title(f"{model} (n = {n}, {label} = {truth:.3f})")
-                ax.grid(alpha=0.3)
-            handles, labels = axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels, loc="upper center", ncol=len(est_names), fontsize=10, frameon=False)
-            fig.tight_layout(rect=(0, 0, 1, 0.92))
+                x = np.arange(len(shifts))
+                for i, name in enumerate(est_names):
+                    positions = x + (i - (n_est - 1) / 2) * width
+                    # EVI 估计量（滤掉 nan）
+                    data = [all_results[model][n][s][name][group]
+                            [np.isfinite(all_results[model][n][s][name][group])]
+                            for s in shifts]
+                    bp = ax.boxplot(data, positions=positions, widths=width * 0.8,
+                                    patch_artist=True, showfliers=False,
+                                    manage_ticks=False)
+                    for patch in bp["boxes"]:
+                        patch.set_facecolor(colors[name])
+                        patch.set_alpha(0.7)
+                    # 每个 μ 处用黑色圆点标注均值（忽略空箱）
+                    means = [float(d.mean()) if d.size else np.nan for d in data]
+                    ax.plot(positions, means, "ko", markersize=2)
+                # 真实 EVI 水平参考线
+                ax.axhline(truth, color="black", linestyle="--", linewidth=1.2,
+                           alpha=0.7)
+                if r == 0:
+                    ax.set_title(rf"{label} = {truth:.3f}")
+                ax.set_xticks(x)
+                ax.set_xticklabels([f"{s:.1f}" for s in shifts])
+                ax.grid(alpha=0.3, which="both", axis="y")
+                # 行标签（样本量）：放在最右列子图的 y 轴右侧
+                if c == len(groups) - 1:
+                    ax.set_ylabel(f"n = {n}", fontsize=11)
+                    ax.yaxis.set_label_position("right")
+        # 最外层横纵坐标说明
+        fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
+        fig.supylabel("EVI estimate", fontsize=13)
+        handles = [Patch(facecolor=colors[name], label=est_labels[name])
+                   for name in est_names]
+        handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
+                                  label="true EVI"))
+        fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+                   fontsize=10, frameon=False)
+        fig.suptitle(model, fontsize=13, y=0.93)
+        fig.tight_layout(rect=(0, 0.04, 1, 0.94))
 
-            out_path = out_dir / f"EVI_shift_{model}_n{n}.png"
-            fig.savefig(out_path, dpi=150)
-            print(f"Line plot saved: {out_path}")
-            plt.close(fig)
+        out_path = out_dir / f"EVI_shift_{model}.png"
+        fig.savefig(out_path, dpi=150)
+        print(f"Boxplot saved: {out_path}")
+        plt.close(fig)
 
 
 if __name__ == "__main__":
@@ -219,27 +238,8 @@ if __name__ == "__main__":
                 pbar.set_postfix_str(f"{model} n={n}")
                 pbar.update(1)
 
-    # 汇总统计（MSE 主结果 + 均值/偏差/std 参考）
-    print("\n" + "=" * 72)
-    print("汇总统计（MSE = 估计值与真值的均方误差）")
-    print(f"{'模型':<5}{'n':>6}{'shift':>8}{'组':<6}{'估计量':<8}{'均值':>9}{'偏差':>9}{'std':>9}{'MSE':>9}")
-    print("-" * 72)
-    mse_by = {model: {n: {name: {group: {} for group in ("gamma_treated", "gamma_control")}
-                          for name in ESTIMATORS} for n in sample_sizes} for model in models}
-    for model in models:
-        for n in sample_sizes:
-            for s in shifts:
-                for group, gname in (("gamma_treated", "γ1"), ("gamma_control", "γ0")):
-                    truth = theory[model]["gamma_1"] if group == "gamma_treated" else theory[model]["gamma_0"]
-                    for name in ESTIMATORS:
-                        mean, bias, std, _rmse, _nv = summarize(all_results[model][n][s][name][group], truth)
-                        m = mse(all_results[model][n][s][name][group], truth)
-                        mse_by[model][n][name][group][s] = m
-                        print(f"{model:<5}{n:>6}{s:>8.2f}{gname:<6}{name:<8}{mean:9.4f}{bias:9.4f}"
-                              f"{std:9.4f}{m:9.4f}")
-
-    # 折线图（每个模型 x 样本量一张）
+    # 平方误差箱线图（一个模型一张）
     out_dir = Path(__file__).resolve().parent / "results"
-    plot_shift_lines(mse_by, theory, models, sample_sizes, shifts, out_dir)
+    plot_shift_boxplots(all_results, theory, models, sample_sizes, shifts, out_dir)
 
     print("\n实验结束。")
