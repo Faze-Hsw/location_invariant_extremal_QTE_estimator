@@ -36,31 +36,33 @@ def marginal_cdf(cfg: dict, model: str, j: int, q: float) -> float:
     j=1 处理组 (Y1), j=0 对照组 (Y0)。
     """
     model_cfg = cfg["outcome_models"][model]
+    mu = float(cfg.get("design", {}).get("mu", 0.0))   # 共享位置偏移 μ
+    q0 = q - mu                                        # F_{Y}(q) = F_{原Y}(q - μ)
 
     if model == "H1":
-        # Y1 = 5S(1+X), Y0 = S(1+X), S ~ t(df)
+        # Y(j) = μ + coef·S(1+X), S ~ t(df)
         coef = 5.0 if j == 1 else 1.0
         df = model_cfg["noise"]["df"]
-        integrand = lambda x: stats.t.cdf(q / (coef * (1 + x)), df=df)
+        integrand = lambda x: stats.t.cdf(q0 / (coef * (1 + x)), df=df)
 
     elif model == "H2":
-        # Y1 = C2·exp(X), C2~Fréchet(2); Y0 = C3·exp(X), C3~Fréchet(3)
+        # Y(j) = μ + C_s·exp(X), C_s~Fréchet(shape)
         shape = (model_cfg["Y1"]["noise"]["shape"] if j == 1
                  else model_cfg["Y0"]["noise"]["shape"])
-        if q <= 0:
+        if q0 <= 0:
             return 0.0
-        integrand = lambda x: stats.invweibull.cdf(q / np.exp(x), c=shape)
+        integrand = lambda x: stats.invweibull.cdf(q0 / np.exp(x), c=shape)
 
     elif model == "H3":
-        # Y1 ~ Pareto(1.75+X, 2); Y0 ~ Pareto(1.75+5X, 1)
+        # Y(j) = μ + P_{shape,scale}, Pareto(0, scale)
         if j == 1:
             shape_formula, scale = model_cfg["Y1"]["shape_formula"], model_cfg["Y1"]["scale"]
         else:
             shape_formula, scale = model_cfg["Y0"]["shape_formula"], model_cfg["Y0"]["scale"]
-        if q <= scale:
+        if q0 <= scale:
             return 0.0
         integrand = lambda x: stats.pareto.cdf(
-            q, b=eval(shape_formula, {"X": x}), loc=0.0, scale=scale)
+            q0, b=eval(shape_formula, {"X": x}), loc=0.0, scale=scale)
 
     else:
         raise ValueError(f"未知模型: {model}")

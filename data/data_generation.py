@@ -79,6 +79,10 @@ def generate_dataset(cfg: dict, model: str, n: int, seed: int) -> dict:
     shared_noise = model_cfg.get("noise")  # H1 的 S 为模型级共享噪声
     Y1 = _generate_potential(model_cfg["Y1"], X, rng, shared_noise)
     Y0 = _generate_potential(model_cfg["Y0"], X, rng, shared_noise)
+    # 共享位置偏移 μ（模型层外加；真实 QTE 平移不变）
+    mu = float(cfg.get("design", {}).get("mu", 0.0))
+    Y1 = Y1 + mu
+    Y0 = Y0 + mu
     Y = np.where(D == 1, Y1, Y0)
 
     return {"X": X, "U": U, "D": D, "Y1": Y1, "Y0": Y0, "Y": Y, "pi": pi}

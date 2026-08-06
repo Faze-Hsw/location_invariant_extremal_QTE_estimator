@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-"""EVI 估计量平移敏感性 Monte Carlo 实验：relative shift -> MSE 折线图。
+"""EVI 估计量位置敏感性 Monte Carlo 实验：mu -> MSE 折线图。
 
-平移采用相对尺度: 实际平移量 c = lambda · q_{Y1}(1-α_n)（与 QTE_experiment 一致），
-配置 shifts 中的值是相对比例 λ，避免绝对平移在不同模型间不可比。
+横坐标为共享位置偏移 μ（模型层外加 Y(j) = μ + 原分布，H1/H2/H3 一致）；
+真实 EVI 是平移不变量，不随 μ 变化。
 
 流程：
-  1. 对每个模型 / 样本量 / λ，依配置生成数据，并把结果指标 Y 统一平移 +λ·q_{Y1}(1-α_n)；
+  1. 对每个模型 / 样本量 / μ，依配置生成不同位置分布的样本；
   2. 分别用 Causal Fraga 与 Causal Hill 估计量估计处理组/对照组 EVI；
-  3. 重复 R 次，对每个估计量计算相对真值的 MSE（一个 λ 对应一个 MSE）；
-  4. 画 fraga / hill 折线图：横轴 λ，纵轴 MSE。
+  3. 重复 R 次，对每个估计量计算相对真值的 MSE（一个 μ 对应一个 MSE）；
+  4. 画 fraga / hill 折线图：横轴 μ，纵轴 MSE。
 
 CLI 参数（均可选，默认读配置文件）：
   --replications R        重复次数，如 --replications 500
   --sample-sizes n1 n2..  样本量列表，如 --sample-sizes 1000 2000
-  --shifts s1 s2 ..       平移量列表，如 --shifts 0 1 5 10
+  --shifts s1 s2 ..       μ 位置偏移列表，如 --shifts 0 1 5 10
 
 运行:
   D:\\Miniconda\\python.exe EVI_experiment.py
@@ -43,7 +43,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "EVI"))
 
 from data_generation import load_config, generate_dataset, tau_levels  # noqa: E402
 from estimate_propensity_sieve import estimate_propensity_sieve  # noqa: E402
-from estimate_quantile_real import real_quantile  # noqa: E402
 from causal_fraga import estimate_evi_causal_fraga  # noqa: E402
 from causal_hill import estimate_evi_for_config as hill_for_config  # noqa: E402
 from estimate_k0 import estimate_k0_by_group, fallback_beta  # noqa: E402
@@ -54,37 +53,39 @@ ESTIMATORS = ("fraga", "hill")
 def run_experiment(cfg, model, n, shifts, replications, base_seed):
     """对单个 (模型, 样本量) 跑 R 次重复。
 
-    筛方法倾向得分只依赖 X、D，与结果 Y（及 shift）无关，因此每个重复只做
-    一次数据生成 + 倾向得分估计，然后对所有 shift 复用 pi_estimate 计算 EVI。
+    横坐标为共享位置偏移 μ（模型层外加 Y(j) = μ + 原分布）：shifts 中的值直接
+    作为 μ（设 cfg["design"]["mu"]），深拷贝配置并重新生成样本。同 seed 下
+    X、U、D 不变，仅 Y 随 μ 变；真实 EVI 是平移不变量，不随 μ 变化。
 
-    Fraga 估计量使用自适应 k0（k0 = k^m）：对每个 (模型, n) 的处理组/对照组
-    分别估计 k0（不取统一值），对应各自的 β_n。Hill 估计量锚点 α_n 不变。
+    筛方法倾向得分只依赖 X、D，与结果 Y（及 μ）无关，因此每重复只筛估计一次，
+    所有 μ 场景复用 pi_estimate。Fraga 使用分组自适应 k0（基于 μ=0 数据），
+    Hill 锚点 α_n 不变。
 
-    平移采用相对尺度: 实际平移量 c = lambda · q_{Y1}(1-α_n)（与 QTE_experiment 一致），
-    shifts 列表中的值是相对比例 λ。
-
-    返回 {λ: {estimator: {group: np.ndarray}}}。
+    返回 {μ: {estimator: {group: np.ndarray}}}。
     """
+    import copy
+
     alpha_n = dict(tau_levels(cfg, n))["alpha_n"]
     beta_fb = fallback_beta(cfg, n)   # 兜底 β_n（自适应失败时回退；分组值优先）
-    scale = real_quantile(cfg, model, 1, 1.0 - alpha_n)  # 处理组锚点理论分位数
 
     results = {s: {name: {"gamma_treated": [], "gamma_control": []}
                    for name in ESTIMATORS} for s in shifts}
     for rep in range(replications):
         seed = base_seed + rep
-        data = generate_dataset(cfg, model, n, seed)
-        data, _h_n, _info = estimate_propensity_sieve(data)
-        base_Y = np.asarray(data["Y"])
-        # 分组 k0：处理组/对照组各自的 β_n（Fraga 对平移不变，用未平移数据估计即可）
-        k0res = estimate_k0_by_group(cfg, data, n)
+        data0 = generate_dataset(cfg, model, n, seed)
+        data0, _h_n, _info = estimate_propensity_sieve(data0)
+        pi0 = data0["pi_estimate"]
+        # 分组 k0：处理组/对照组各自的 β_n（Fraga 位置不变，用 μ=0 数据估计即可）
+        k0res = estimate_k0_by_group(cfg, data0, n)
         beta_t, beta_c = k0res["beta_treated"], k0res["beta_control"]
         for s in shifts:
-            data_s = dict(data)                 # 浅拷贝，仅替换 Y 字段
-            data_s["Y"] = base_Y + s * scale    # 相对平移 c = λ · q_{Y1}(1-α_n)
+            cfg_s = copy.deepcopy(cfg)
+            cfg_s["design"]["mu"] = s                 # 横坐标：共享位置偏移 μ
+            data_s = generate_dataset(cfg_s, model, n, seed)
+            data_s["pi_estimate"] = pi0              # X、D 相同 → 倾向得分复用
             # Fraga（分组 β_n，兜底 beta_fb）与 Hill（统一 α_n）
             res_f = estimate_evi_causal_fraga(data_s, beta_fb, alpha_n, beta_t, beta_c)
-            res_h = hill_for_config(cfg, data_s, n)
+            res_h = hill_for_config(cfg_s, data_s, n)
             for tag, res in (("fraga", res_f), ("hill", res_h)):
                 results[s][tag]["gamma_treated"].append(res["gamma_treated"])
                 results[s][tag]["gamma_control"].append(res["gamma_control"])
@@ -142,7 +143,7 @@ def plot_shift_lines(mse_by, theory, models, sample_sizes, shifts, out_dir):
                     vals = [mse_by[model][n][name][group][s] for s in shifts]
                     ax.plot(shifts, vals, marker="o", linewidth=1.8, linestyle="-",
                             label=est_labels[name], color=colors[name])
-                ax.set_xlabel("relative shift λ")
+                ax.set_xlabel(r"location shift $\mu$")
                 ax.set_ylabel("MSE")
                 ax.set_title(f"{model} (n = {n}, {label} = {truth:.3f})")
                 ax.grid(alpha=0.3)
@@ -182,11 +183,11 @@ if __name__ == "__main__":
     theory = {m: cfg["outcome_models"][m]["evi"] for m in models}
 
     print("=" * 72)
-    print("EVI 估计量平移敏感性 Monte Carlo 实验")
+    print("EVI 估计量位置敏感性 Monte Carlo 实验")
     print("  （并行粒度：模型 x 样本量组合，每个组合一个进程）")
     print(f"  模型: {models}")
     print(f"  样本量列表: {sample_sizes}")
-    print(f"  相对平移比例 λ 列表: {shifts}")
+    print(f"  μ 位置偏移列表: {shifts}")
     print(f"  重复次数 R = {replications}")
     print("=" * 72)
 
