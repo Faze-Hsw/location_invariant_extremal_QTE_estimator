@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""EVI 估计量的 k 敏感性分析：不同 k 下的 EVI 估计量箱线图。
+"""EVI 估计量的 k 敏感性分析：不同 k 下的均值与 MSE 折线图。
 
 仿照 Hill EVI 的 k 敏感性模拟图：固定 (模型, 样本量, 组)，
 改变估计使用的 top-k 观测数（中间水平 α_n = k/n），重复 R 次估计
-Causal Fraga 与 Causal Hill 的 EVI（处理组/对照组），绘制 EVI 估计量
-随 k 的变化箱线图（展示 R 次重复的估计分布），并画真实 EVI 参考线。
+Causal Fraga 与 Causal Hill 的 EVI（处理组/对照组），绘制估计均值
+（应接近真实 EVI）与 MSE（相对真实 EVI）随 k 的变化折线图。
 
 估计设置：
   - Hill  : estimate_evi_causal_hill(data, alpha_n)，α_n = k/n
@@ -12,15 +12,15 @@ Causal Fraga 与 Causal Hill 的 EVI（处理组/对照组），绘制 EVI 估�
             得到分组 β_t/β_c（k0 = k^m，k = n·α_n），再
             estimate_evi_causal_fraga(data, beta_fb, alpha_n, beta_t, beta_c)
 
-每个模型一张图（仅 EVI 估计量）：行 = 样本量 n、列 = 组 (γ1/γ0)，
-子图横轴 = k（在 (0, kmax] 等距取 6 个点），纵轴 = EVI 估计量，
-每个 k 处 fraga / hill 各一个箱线图，真实 EVI 参考线。
-横纵坐标说明放在图最外层。
+每个模型两张图（均值 / MSE）：行 = 样本量 n、列 = 组 (γ1/γ0)，
+子图横轴 = k（在 (0, kmax] 等距取 10 个点，刻度 6 个），每估计量一条折线。
+均值图纵轴 = mean of EVI estimates（线性，真实 EVI 参考线）；
+MSE 图纵轴 = MSE（对数刻度）。横纵坐标说明放在图最外层。
 
 CLI 参数：
   --replications R        重复次数（默认读配置）
   --sample-sizes n1 n2..  样本量列表
-  --k-grid k1 k2 ..       指定 k 序列（默认 (0, n/2] 等距 6 点）
+  --k-grid k1 k2 ..       指定 k 序列（默认 [50, n/2] 等距 10 点）
   --workers W             并行进程数
 
 运行:
@@ -124,10 +124,10 @@ def run_experiment(cfg, model, n, k_grid, replications, base_seed):
 
 def plot_k_curves(all_results, truth_by_n, model, sample_sizes, k_grid_by_n,
                   out_dir):
-    """每个模型一张图：行 = 样本量 n、列 = 组 (γ1/γ0)，
-    子图横轴 = k（top observations），纵轴 = EVI 估计量，
-    每估计量一条折线（各 k 处 R 次重复的均值），真实 EVI 参考线。
-    横纵坐标说明放在图的最外层。"""
+    """每个模型两张图（均值 / MSE）：行 = 样本量 n、列 = 组 (γ1/γ0)，
+    子图横轴 = k（top observations），每估计量一条折线（各 k 处 R 次重复的均值）。
+    均值图纵轴 = mean of EVI estimates（线性，真实 EVI 参考线）；
+    MSE 图纵轴 = MSE（对数刻度）。横纵坐标说明放在图的最外层。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -136,47 +136,60 @@ def plot_k_curves(all_results, truth_by_n, model, sample_sizes, k_grid_by_n,
     n_g = len(GROUPS)
     n_n = len(sample_sizes)
     ks_by_n = {n: np.asarray(k_grid_by_n[n], dtype=float) for n in sample_sizes}
+    # metric: (是否均值, 纵轴标签, 文件名后缀)
+    metrics = (("mean", "mean of EVI estimates", "mean"),
+               ("mse", "MSE", "mse"))
 
-    fig, axes = plt.subplots(n_n, n_g, figsize=(4.4 * n_g, 3.4 * n_n), squeeze=False)
-    for r, n in enumerate(sample_sizes):
-        ks = ks_by_n[n]
-        for c, g in enumerate(GROUPS):
-            ax = axes[r][c]
-            truth = truth_by_n[n][g]
-            for name in ESTIMATORS:
-                # 各 k 处 R 次重复的均值（忽略 nan）
-                means = [all_results[n][g][k][name][np.isfinite(
-                    all_results[n][g][k][name])].mean() for k in ks]
-                ax.plot(ks, means, marker="o", markersize=2.5, linewidth=1.2,
-                        color=COLORS[name], label=LABELS[name])
-            # 真实 EVI 水平参考线
-            ax.axhline(truth, color="black", linestyle="--", linewidth=1.2,
-                       alpha=0.7)
-            if r == 0:
-                ax.set_title(rf"{GROUP_LABELS[g]} = {truth:.3f}")
-            # 横轴刻度固定为 (0, kmax] 等距 6 个点（数据点仍为 10 个 k 值）
-            ticks = np.linspace(0.0, ks.max(), 6)
-            ax.set_xticks(ticks)
-            ax.set_xticklabels([int(t) for t in ticks], fontsize=7)
-            ax.grid(alpha=0.3, which="both", axis="y")
-            if c == n_g - 1:
-                ax.set_ylabel(f"n = {n}", fontsize=11)
-                ax.yaxis.set_label_position("right")
-    # 最外层横纵坐标说明
-    fig.supxlabel("k-number of top observations", fontsize=13, y=0.04)
-    fig.supylabel("mean of EVI estimates", fontsize=13, x=0.05)
-    handles = [plt.Line2D([0], [0], color=COLORS[name], label=LABELS[name])
-               for name in ESTIMATORS]
-    handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
-                              label="true EVI"))
-    fig.legend(handles=handles, loc="upper center", ncol=len(handles),
-               fontsize=9, frameon=False)
-    fig.suptitle(model, fontsize=13, y=0.93)
-    fig.tight_layout(rect=(0.03, 0.05, 0.97, 0.94))
-    out_path = out_dir / f"EVI_k_{model}.png"
-    fig.savefig(out_path, dpi=150)
-    print(f"K-sensitivity plot saved: {out_path}")
-    plt.close(fig)
+    for metric, ylabel, suffix in metrics:
+        fig, axes = plt.subplots(n_n, n_g, figsize=(4.4 * n_g, 3.4 * n_n),
+                                 squeeze=False)
+        for r, n in enumerate(sample_sizes):
+            ks = ks_by_n[n]
+            for c, g in enumerate(GROUPS):
+                ax = axes[r][c]
+                truth = truth_by_n[n][g]
+                for name in ESTIMATORS:
+                    if metric == "mean":
+                        # 各 k 处 R 次重复的均值（忽略 nan）
+                        vals = [all_results[n][g][k][name][np.isfinite(
+                            all_results[n][g][k][name])].mean() for k in ks]
+                    else:
+                        # 各 k 处相对真值的 MSE（忽略 nan）
+                        vals = [np.mean((all_results[n][g][k][name][
+                            np.isfinite(all_results[n][g][k][name])] - truth) ** 2)
+                            for k in ks]
+                    ax.plot(ks, vals, marker="o", markersize=2.5, linewidth=1.2,
+                            color=COLORS[name], label=LABELS[name])
+                if metric == "mean":
+                    # 真实 EVI 水平参考线（两图均为线性刻度）
+                    ax.axhline(truth, color="black", linestyle="--", linewidth=1.2,
+                               alpha=0.7)
+                if r == 0:
+                    ax.set_title(rf"{GROUP_LABELS[g]} = {truth:.3f}")
+                # 横轴刻度固定为 (0, kmax] 等距 6 个点（数据点仍为 10 个 k 值）
+                ticks = np.linspace(0.0, ks.max(), 6)
+                ax.set_xticks(ticks)
+                ax.set_xticklabels([int(t) for t in ticks], fontsize=7)
+                ax.grid(alpha=0.3, which="both", axis="y")
+                if c == n_g - 1:
+                    ax.set_ylabel(f"n = {n}", fontsize=11)
+                    ax.yaxis.set_label_position("right")
+        # 最外层横纵坐标说明
+        fig.supxlabel("k-number of top observations", fontsize=13, y=0.04)
+        fig.supylabel(ylabel, fontsize=13, x=0.05)
+        handles = [plt.Line2D([0], [0], color=COLORS[name], label=LABELS[name])
+                   for name in ESTIMATORS]
+        if metric == "mean":
+            handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
+                                      label="true EVI"))
+        fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+                   fontsize=9, frameon=False)
+        fig.suptitle(model, fontsize=13, y=0.93)
+        fig.tight_layout(rect=(0.03, 0.05, 0.97, 0.94))
+        out_path = out_dir / f"EVI_k_{suffix}_{model}.png"
+        fig.savefig(out_path, dpi=150)
+        print(f"K-sensitivity plot saved: {out_path}")
+        plt.close(fig)
 
 
 if __name__ == "__main__":

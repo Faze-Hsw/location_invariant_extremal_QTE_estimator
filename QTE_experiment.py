@@ -16,11 +16,12 @@ MSE（真实 QTE 由 QTE_real.py 给出），覆盖配置中全部 tau_n_* 水�
 流程：
   1. 对每个模型 / 样本量 / μ，依配置生成不同位置分布的样本；
   2. 各方法估计各分位数水平 1-tau_n 处的 QTE；
-  3. 重复 R 次，对每个方法计算相对真实 QTE 的 MSE（一个 μ 对应一个 MSE）；
-  4. 画箱线图：一个模型一张图，行 = 样本量 n、列 = tau_n 水平。
-     子图内横轴 μ、纵轴 Squared Error（对数刻度），
-     每个 μ 处各方法一个箱线图（展示 R 次重复的平方误差分布）；
-     横纵坐标说明（location shift / Squared Error）放在图最外层。
+  3. 重复 R 次，收集每个估计量的估计值；
+  4. 画箱线图：一个模型两张图（估计量 / 平方误差），行 = 样本量 n、
+     列 = tau_n 水平，子图内横轴 μ、每个 μ 处各方法一个箱线图。
+     估计量图纵轴 = QTE estimate（线性刻度，含真实 QTE 参考线）；
+     平方误差图纵轴 = Squared Error（对数刻度）；
+     横纵坐标说明（location shift / 指标）放在图最外层。
 
 CLI 参数（均可选，默认读配置文件）：
   --replications R        重复次数，如 --replications 500
@@ -188,10 +189,11 @@ def formula_to_latex(formula):
 
 def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                         models, sample_sizes, shifts, out_dir):
-    """一个模型一张图：行 = 样本量 n，列 = tau_n 水平。
-    子图内横轴 μ、纵轴平方误差 (QTE 估计 - 真实 QTE)^2（对数刻度），
-    每个 μ 处各方法一个箱线图（展示 R 次重复的平方误差分布）。
-    横纵坐标说明（location shift / squared error）放在图的最外层。"""
+    """一个模型两张图（估计量 / 平方误差）：行 = 样本量 n，列 = tau_n 水平。
+    子图内横轴 μ、每个 μ 处各方法一个箱线图（展示 R 次重复的估计分布）。
+    图 1 纵轴 = QTE 估计量（线性刻度，含真实 QTE 参考线）；
+    图 2 纵轴 = 平方误差 (估计 - 真实)^2（对数刻度）。
+    横纵坐标说明（location shift / 指标）放在图的最外层。"""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -208,56 +210,73 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
     width = 0.8 / n_methods
     n_tau = len(tau_names)
     n_n = len(sample_sizes)
+    # metric: (纵轴标签, 是否估计量图, 文件名后缀)
+    metrics = (("QTE estimate", True, "est"),
+               ("Squared Error", False, "sqerr"))
     for model in models:
-        fig, axes = plt.subplots(n_n, n_tau, figsize=(4.6 * n_tau, 3.6 * n_n),
-                                 squeeze=False)
-        for r, n in enumerate(sample_sizes):
-            for c, name in enumerate(tau_names):
-                ax = axes[r][c]
-                _tau, truth_qte = truth_by[model][n][name]
-                results, _truth, _tau_vals = all_results[model][n]
-                x = np.arange(len(shifts))
-                for i, m in enumerate(METHODS):
-                    positions = x + (i - (n_methods - 1) / 2) * width
-                    # 平方误差恒非负；对数刻度只能展示正值，过滤零值（及 nan）
-                    data = [((results[name][s][m] - truth_qte) ** 2)
-                            [np.isfinite(results[name][s][m])] for s in shifts]
-                    data = [d[d > 0] for d in data]
-                    bp = ax.boxplot(data, positions=positions, widths=width * 0.8,
-                                    patch_artist=True, showfliers=False,
-                                    manage_ticks=False)
-                    for patch in bp["boxes"]:
-                        patch.set_facecolor(COLORS[m])
-                        patch.set_alpha(0.7)
-                    # 每个 μ 处用黑色圆点标注均值（忽略空箱）
-                    means = [float(d.mean()) if d.size else np.nan for d in data]
-                    ax.plot(positions, means, "ko", markersize=2)
-                ax.set_xticks(x)
-                ax.set_xticklabels([f"{s:.1f}" for s in shifts])
-                # τ_n 标识只在第一行子图顶部显示
-                if r == 0:
-                    ax.set_title(rf"$\tau_n = {tau_formulas[name]}$")
-                ax.set_yscale("log")
-                ax.yaxis.set_major_locator(LogLocator(base=10, numticks=8))  # 10 的幂刻度
-                ax.grid(alpha=0.3, which="both", axis="y")
-                # 行标签（样本量）：放在最右列子图的 y 轴右侧
-                if c == n_tau - 1:
-                    ax.set_ylabel(f"n = {n}", fontsize=11)
-                    ax.yaxis.set_label_position("right")
-        # 最外层横纵坐标说明
-        fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.08)
-        fig.supylabel("Squared Error", fontsize=13)
-        handles = [Patch(facecolor=COLORS[m], label=LABELS[m]) for m in METHODS]
-        fig.legend(handles=handles, loc="upper center", ncol=len(METHODS),
-                   fontsize=10, frameon=False)
-        # suptitle 下移，避免与顶部图例重合
-        fig.suptitle(model, fontsize=13, y=0.90)
-        fig.tight_layout(rect=(0, 0.04, 1, 0.94))
+        for metric, is_est, suffix in metrics:
+            fig, axes = plt.subplots(n_n, n_tau, figsize=(4.6 * n_tau, 3.6 * n_n),
+                                     squeeze=False)
+            for r, n in enumerate(sample_sizes):
+                for c, name in enumerate(tau_names):
+                    ax = axes[r][c]
+                    _tau, truth_qte = truth_by[model][n][name]
+                    results, _truth, _tau_vals = all_results[model][n]
+                    x = np.arange(len(shifts))
+                    for i, m in enumerate(METHODS):
+                        positions = x + (i - (n_methods - 1) / 2) * width
+                        if is_est:
+                            # 估计量（滤掉 nan；对数刻度只能展示正值，再过滤非正值）
+                            data = [results[name][s][m]
+                                    [np.isfinite(results[name][s][m])] for s in shifts]
+                            data = [d[d > 0] for d in data]
+                        else:
+                            # 平方误差恒非负；对数刻度只能展示正值，过滤零值（及 nan）
+                            data = [((results[name][s][m] - truth_qte) ** 2)
+                                    [np.isfinite(results[name][s][m])] for s in shifts]
+                            data = [d[d > 0] for d in data]
+                        bp = ax.boxplot(data, positions=positions, widths=width * 0.8,
+                                        patch_artist=True, showfliers=False,
+                                        manage_ticks=False, whis=(10, 90))
+                        for patch in bp["boxes"]:
+                            patch.set_facecolor(COLORS[m])
+                            patch.set_alpha(0.7)
+                        # 每个 μ 处用黑色圆点标注均值（忽略空箱）
+                        means = [float(d.mean()) if d.size else np.nan for d in data]
+                        ax.plot(positions, means, "ko", markersize=2)
+                    ax.set_xticks(x)
+                    ax.set_xticklabels([f"{s:.1f}" for s in shifts])
+                    # τ_n 标识只在第一行子图顶部显示
+                    if r == 0:
+                        ax.set_title(rf"$\tau_n = {tau_formulas[name]}$")
+                    # 两图均用对数刻度；估计量图加真实 QTE 参考线（需为正，负时自动不显示）
+                    ax.set_yscale("log")
+                    ax.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
+                    if is_est and truth_qte > 0:
+                        ax.axhline(truth_qte, color="black", linestyle="--",
+                                   linewidth=1.2, alpha=0.7)
+                    ax.grid(alpha=0.3, which="major", axis="y")
+                    # 行标签（样本量）：放在最右列子图的 y 轴右侧
+                    if c == n_tau - 1:
+                        ax.set_ylabel(f"n = {n}", fontsize=11)
+                        ax.yaxis.set_label_position("right")
+            # 最外层横纵坐标说明
+            fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
+            fig.supylabel(metric, fontsize=13)
+            handles = [Patch(facecolor=COLORS[m], label=LABELS[m]) for m in METHODS]
+            if is_est:
+                handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
+                                          label="true QTE"))
+            fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+                       fontsize=10, frameon=False)
+            # suptitle 下移，避免与顶部图例重合
+            fig.suptitle(model, fontsize=13, y=0.93)
+            fig.tight_layout(rect=(0, 0.04, 1, 0.94))
 
-        out_path = out_dir / f"QTE_shift_{model}.png"
-        fig.savefig(out_path, dpi=150)
-        print(f"Line plot saved: {out_path}")
-        plt.close(fig)
+            out_path = out_dir / f"QTE_shift_{suffix}_{model}.png"
+            fig.savefig(out_path, dpi=150)
+            print(f"Line plot saved: {out_path}")
+            plt.close(fig)
 
 
 if __name__ == "__main__":

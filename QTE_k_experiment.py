@@ -8,9 +8,9 @@
 
 方法：
   - Deuber      : Hill EVI + Weissman 外推（锚点 α_n = k/n）
-  - Deuber_diff : Hill EVI + 差分外推（锚点 α_n = k/n，β_n = k^(2/3)/n）
-  - Fraga_alpha : Fraga EVI + Weissman 外推（锚点 α_n = k/n，辅助 β_n = k^(2/3)/n）
-  - Fraga_diff  : Fraga EVI + 差分外推
+  - Deuber_diff : Hill EVI + 差分外推（锚点 α_n = k/n，β_n = k^(2/3)/n 统一）
+  - Fraga_alpha : Fraga EVI + Weissman 外推（锚点 α_n = k/n，k0 随 k 分组自适应）
+  - Fraga_diff  : Fraga EVI + 差分外推（k0 随 k 分组自适应）
 
 对每个 (模型, 样本量) 一张图：行 = (均值, MSE)，列 = tau_n 水平，
 横轴 = k（top observations），每方法一条折线，真实 QTE 参考线。
@@ -45,6 +45,7 @@ for _sub in ("data", "estimate", "EVI", "QTE"):
 
 from data_generation import load_config, generate_dataset, tau_levels  # noqa: E402
 from estimate_propensity_sieve import estimate_propensity_sieve  # noqa: E402
+from estimate_k0 import estimate_k0_by_group, fallback_beta  # noqa: E402
 from Deuber import estimate_qte_extrapolation  # noqa: E402
 from Deuber_diff import estimate_qte_diff  # noqa: E402
 from QTE_Fraga import estimate_qte_extrapolation_fraga  # noqa: E402
@@ -67,24 +68,24 @@ LABELS = {
 
 
 def default_k_grid(cfg, n):
-    """默认 k 网格：对数网格，k 从 10 到 n/2（保证锚点水平 1-k/n 不太极端）。"""
+    """默认 k 网格：[50, n/2] 等距取 10 个点（与 EVI_k_experiment 一致）。"""
     if cfg["design"].get("k_grid"):
         return [float(k) for k in cfg["design"]["k_grid"]]
-    k_min = max(5.0, 2.0 * n * min(
-        eval(q["formula"], {"n": n, "log": np.log}) for q in cfg["design"]["quantile_levels"]
-        if q["name"].startswith("tau_n")))
+    k_min = 50
     k_max = n // 2
-    return np.unique(np.round(np.logspace(np.log10(k_min), np.log10(k_max), 15)))
+    return np.linspace(k_min, k_max, 10)
 
 
-def estimate_qte_by_method(data, tau, k, n, truth):
+def estimate_qte_by_method(cfg, data, tau, k, n, truth):
     """给定 k（top observations），估计各方法 QTE（tau 为目标上尾概率）。
 
+    cfg : 实验配置（k0 自适应估计用）
     data: 含 Y, D, pi_estimate 的数据 dict
     返回 {method: qte}（估计失败/超尾越界时可为 nan）。
     """
     alpha_n = float(k) / n                 # 锚点水平
-    beta_dd = float(k) ** (2.0 / 3.0) / n  # Deuber_diff / Fraga 辅助水平
+    beta_dd = float(k) ** (2.0 / 3.0) / n  # Deuber_diff 统一辅助水平
+    beta_fb = fallback_beta(cfg, n)        # Fraga 兜底辅助水平
     out = {}
     try:
         out["Deuber"] = estimate_qte_extrapolation(data, alpha_n, tau)["qte_ext"]
@@ -95,13 +96,22 @@ def estimate_qte_by_method(data, tau, k, n, truth):
     except Exception:
         out["Deuber_diff"] = np.nan
     try:
+        # Fraga 的 k0 随 k 变化：分组自适应估计 β_n（k0 = k^m，k = n·α_n）
+        k0res = estimate_k0_by_group(cfg, data, n, k=k)
+        beta_t = k0res["beta_treated"]
+        beta_c = k0res["beta_control"]
         out["Fraga_alpha"] = estimate_qte_extrapolation_fraga(
-            data, beta_dd, alpha_n, tau)["qte_ext"]
+            data, beta_fb, alpha_n, tau,
+            beta_treated=beta_t, beta_control=beta_c)["qte_ext"]
     except Exception:
         out["Fraga_alpha"] = np.nan
     try:
+        k0res = estimate_k0_by_group(cfg, data, n, k=k)
+        beta_t = k0res["beta_treated"]
+        beta_c = k0res["beta_control"]
         out["Fraga_diff"] = estimate_qte_diff_fraga(
-            data, alpha_n, beta_dd, tau)["qte_ext"]
+            data, alpha_n, beta_fb, tau,
+            beta_treated=beta_t, beta_control=beta_c)["qte_ext"]
     except Exception:
         out["Fraga_diff"] = np.nan
     return out
@@ -121,7 +131,7 @@ def run_experiment(cfg, model, n, k_grid, replications, base_seed):
         data, _h_n, _info = estimate_propensity_sieve(data)
         for k in k_grid:
             for name in tau_names:
-                est = estimate_qte_by_method(data, levels[name], k, n, truth[name])
+                est = estimate_qte_by_method(cfg, data, levels[name], k, n, truth[name])
                 for m in METHODS:
                     results[name][k][m].append(est[m])
     for name in tau_names:
@@ -160,7 +170,7 @@ def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
     n_tau = len(tau_names)
     n_n = len(sample_sizes)
     ks_by_n = {n: np.asarray(k_grid_by_n[n], dtype=float) for n in sample_sizes}
-    for metric, ylabel, suffix in (("mean", "mean QTE estimate", "mean"),
+    for metric, ylabel, suffix in (("mean", "mean of QTE estimates", "mean"),
                                    ("mse", "MSE", "mse")):
         fig, axes = plt.subplots(n_n, n_tau, figsize=(4.2 * n_tau, 3.4 * n_n),
                                  squeeze=False)
@@ -183,13 +193,13 @@ def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
                 ticks = np.linspace(0, ks.max(), 6)
                 ax.set_xticks(ticks)
                 ax.set_xticklabels([int(t) for t in ticks], fontsize=7)
-                ax.grid(alpha=0.3, which="both", axis="y")
+                ax.grid(alpha=0.3, which="major", axis="y")
                 # 行标签（样本量）：放在最右列子图的 y 轴右侧
                 if c == n_tau - 1:
                     ax.set_ylabel(f"n = {n}", fontsize=11)
                     ax.yaxis.set_label_position("right")
         # 最外层横纵坐标说明
-        fig.supxlabel("k (number of top observations)", fontsize=13, y=0.04)
+        fig.supxlabel("k-number of top observations", fontsize=13, y=0.04)
         fig.supylabel(ylabel, fontsize=13)
         handles = [plt.Line2D([0], [0], color=COLORS[m], label=LABELS[m])
                    for m in METHODS]

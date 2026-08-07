@@ -3,13 +3,13 @@
 
 基于论文公式 (7)：
 
-    γ̂_1^H := (1/(n·τ_n)) Σ_i [log(Y_i) - log(q̂_1(1-τ_n))]
-             · [D_i / π̂(X_i)] · 1{Y_i > q̂_1(1-τ_n)}
+    γ̂_1^H := (1/(n·α_n)) Σ_i [log(Y_i) - log(q̂_1(1-α_n))]
+             · [D_i / π̂(X_i)] · 1{Y_i > q̂_1(1-α_n)}
 
-    γ̂_0^H := (1/(n·τ_n)) Σ_i [log(Y_i) - log(q̂_0(1-τ_n))]
-             · [(1-D_i) / (1-π̂(X_i))] · 1{Y_i > q̂_0(1-τ_n)}
+    γ̂_0^H := (1/(n·α_n)) Σ_i [log(Y_i) - log(q̂_0(1-α_n))]
+             · [(1-D_i) / (1-π̂(X_i))] · 1{Y_i > q̂_0(1-α_n)}
 
-图里的 τ_n 对应本仓库配置中的 α_n（中间分位数水平）。
+α_n 为中间分位数水平（配置 design.alpha_n，α_n = n^{0.65}/n）。
 
 输入:  含 Y, D, pi_estimate 字段的 dict（一维数组）
 输出:  处理组与对照组的 Hill EVI 估计 γ̂_1, γ̂_0
@@ -44,7 +44,7 @@ def estimate_evi_causal_hill(data, alpha_n):
     """估计处理组与对照组的 Causal Hill EVI。
 
     data   : dict，含 Y, D, pi_estimate
-    alpha_n: 分位数水平 τ_n（对应上尾概率），图里记为 τ_n
+    alpha_n: 中间分位数水平 α_n（上尾概率，配置 design.alpha_n）
 
     返回 dict {alpha_n, q_treated, q_control, gamma_treated, gamma_control}。
     """

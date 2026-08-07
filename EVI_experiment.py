@@ -8,9 +8,11 @@
   1. 对每个模型 / 样本量 / μ，依配置生成不同位置分布的样本；
   2. 分别用 Causal Fraga 与 Causal Hill 估计量估计处理组/对照组 EVI；
   3. 重复 R 次，收集每个估计量的估计值；
-  4. 画 EVI 估计量箱线图：一个模型一张图，行 = 样本量 n、列 = 组 (γ1/γ0)，
-     子图内横轴 μ、纵轴 EVI 估计量（线性刻度），每个 μ 处 fraga/hill
-     各一个箱线图，并画真实 EVI 水平参考线。
+  4. 画箱线图：一个模型两张图（估计量 / 平方误差），行 = 样本量 n、
+     列 = 组 (γ1/γ0)，子图内横轴 μ、每个 μ 处 fraga/hill 各一个箱线图。
+     估计量图纵轴 = EVI estimate（线性刻度，含真实 EVI 参考线）；
+     平方误差图纵轴 = Squared Error（对数刻度）；
+     横纵坐标说明（location shift / 指标）放在图最外层。
 
 CLI 参数（均可选，默认读配置文件）：
   --replications R        重复次数，如 --replications 500
@@ -99,11 +101,11 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
 
 
 def plot_shift_boxplots(all_results, theory, models, sample_sizes, shifts, out_dir):
-    """每个模型一张图：行 = 样本量 n，列 = 组 (γ1/γ0)。
-    子图内横轴 μ、纵轴 EVI 估计量（线性刻度），
-    每个 μ 处 fraga / hill 各一个箱线图（展示 R 次重复的估计分布），
-    并画真实 EVI 水平参考线。
-    横纵坐标说明（location shift / EVI estimate）放在图的最外层。"""
+    """一个模型两张图（估计量 / 平方误差）：行 = 样本量 n，列 = 组 (γ1/γ0)。
+    子图内横轴 μ、每个 μ 处 fraga / hill 各一个箱线图（R 次重复估计分布）。
+    图 1 纵轴 = EVI 估计量（线性刻度，含真实 EVI 参考线）；
+    图 2 纵轴 = 平方误差 (估计 - 真实)^2（对数刻度）。
+    横纵坐标说明（location shift / 指标）放在图的最外层。"""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -122,58 +124,70 @@ def plot_shift_boxplots(all_results, theory, models, sample_sizes, shifts, out_d
     width = 0.8 / n_est
     n_n = len(sample_sizes)
     groups = ("gamma_treated", "gamma_control")
+    # metric: (纵轴标签, 是否估计量图, 文件名后缀)
+    metrics = (("EVI estimate", True, "est"),
+               ("Squared Error", False, "sqerr"))
     for model in models:
-        fig, axes = plt.subplots(n_n, len(groups), figsize=(4.6 * len(groups), 3.6 * n_n),
-                                 squeeze=False)
-        for r, n in enumerate(sample_sizes):
-            for c, group in enumerate(groups):
-                ax = axes[r][c]
-                label = "γ₁" if group == "gamma_treated" else "γ₀"
-                truth = theory[model]["gamma_1"] if group == "gamma_treated" else theory[model]["gamma_0"]
-                x = np.arange(len(shifts))
-                for i, name in enumerate(est_names):
-                    positions = x + (i - (n_est - 1) / 2) * width
-                    # EVI 估计量（滤掉 nan）
-                    data = [all_results[model][n][s][name][group]
-                            [np.isfinite(all_results[model][n][s][name][group])]
-                            for s in shifts]
-                    bp = ax.boxplot(data, positions=positions, widths=width * 0.8,
-                                    patch_artist=True, showfliers=False,
-                                    manage_ticks=False)
-                    for patch in bp["boxes"]:
-                        patch.set_facecolor(colors[name])
-                        patch.set_alpha(0.7)
-                    # 每个 μ 处用黑色圆点标注均值（忽略空箱）
-                    means = [float(d.mean()) if d.size else np.nan for d in data]
-                    ax.plot(positions, means, "ko", markersize=2)
-                # 真实 EVI 水平参考线
-                ax.axhline(truth, color="black", linestyle="--", linewidth=1.2,
-                           alpha=0.7)
-                if r == 0:
-                    ax.set_title(rf"{label} = {truth:.3f}")
-                ax.set_xticks(x)
-                ax.set_xticklabels([f"{s:.1f}" for s in shifts])
-                ax.grid(alpha=0.3, which="both", axis="y")
-                # 行标签（样本量）：放在最右列子图的 y 轴右侧
-                if c == len(groups) - 1:
-                    ax.set_ylabel(f"n = {n}", fontsize=11)
-                    ax.yaxis.set_label_position("right")
-        # 最外层横纵坐标说明
-        fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
-        fig.supylabel("EVI estimate", fontsize=13)
-        handles = [Patch(facecolor=colors[name], label=est_labels[name])
-                   for name in est_names]
-        handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
-                                  label="true EVI"))
-        fig.legend(handles=handles, loc="upper center", ncol=len(handles),
-                   fontsize=10, frameon=False)
-        fig.suptitle(model, fontsize=13, y=0.93)
-        fig.tight_layout(rect=(0, 0.04, 1, 0.94))
+        for metric, is_est, suffix in metrics:
+            fig, axes = plt.subplots(n_n, len(groups), figsize=(4.6 * len(groups), 3.6 * n_n),
+                                     squeeze=False)
+            for r, n in enumerate(sample_sizes):
+                for c, group in enumerate(groups):
+                    ax = axes[r][c]
+                    label = "γ₁" if group == "gamma_treated" else "γ₀"
+                    truth = theory[model]["gamma_1"] if group == "gamma_treated" else theory[model]["gamma_0"]
+                    x = np.arange(len(shifts))
+                    for i, name in enumerate(est_names):
+                        positions = x + (i - (n_est - 1) / 2) * width
+                        if is_est:
+                            # EVI 估计量（滤掉 nan）
+                            data = [all_results[model][n][s][name][group]
+                                    [np.isfinite(all_results[model][n][s][name][group])]
+                                    for s in shifts]
+                        else:
+                            # 平方误差（滤掉 nan）
+                            data = [((all_results[model][n][s][name][group] - truth) ** 2)
+                                    [np.isfinite(all_results[model][n][s][name][group])]
+                                    for s in shifts]
+                        bp = ax.boxplot(data, positions=positions, widths=width * 0.8,
+                                        patch_artist=True, showfliers=False,
+                                        manage_ticks=False, whis=(10, 90))
+                        for patch in bp["boxes"]:
+                            patch.set_facecolor(colors[name])
+                            patch.set_alpha(0.7)
+                        # 每个 μ 处用黑色圆点标注均值（忽略空箱）
+                        means = [float(d.mean()) if d.size else np.nan for d in data]
+                        ax.plot(positions, means, "ko", markersize=2)
+                    # 估计量图加真实 EVI 参考线（两图均为线性刻度）
+                    if is_est:
+                        ax.axhline(truth, color="black", linestyle="--", linewidth=1.2,
+                                   alpha=0.7)
+                    if r == 0:
+                        ax.set_title(rf"{label} = {truth:.3f}")
+                    ax.set_xticks(x)
+                    ax.set_xticklabels([f"{s:.1f}" for s in shifts])
+                    ax.grid(alpha=0.3, which="both", axis="y")
+                    # 行标签（样本量）：放在最右列子图的 y 轴右侧
+                    if c == len(groups) - 1:
+                        ax.set_ylabel(f"n = {n}", fontsize=11)
+                        ax.yaxis.set_label_position("right")
+            # 最外层横纵坐标说明
+            fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
+            fig.supylabel(metric, fontsize=13)
+            handles = [Patch(facecolor=colors[name], label=est_labels[name])
+                       for name in est_names]
+            if is_est:
+                handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
+                                          label="true EVI"))
+            fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+                       fontsize=10, frameon=False)
+            fig.suptitle(model, fontsize=13, y=0.93)
+            fig.tight_layout(rect=(0, 0.04, 1, 0.94))
 
-        out_path = out_dir / f"EVI_shift_{model}.png"
-        fig.savefig(out_path, dpi=150)
-        print(f"Boxplot saved: {out_path}")
-        plt.close(fig)
+            out_path = out_dir / f"EVI_shift_{suffix}_{model}.png"
+            fig.savefig(out_path, dpi=150)
+            print(f"Boxplot saved: {out_path}")
+            plt.close(fig)
 
 
 if __name__ == "__main__":
