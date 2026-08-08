@@ -60,10 +60,10 @@ COLORS = {
     "Fraga_diff": "#7030a0",
 }
 LABELS = {
-    "Deuber": "Deuber (Hill)",
-    "Deuber_diff": "Deuber (diff extrapolation)",
-    "Fraga_alpha": "Fraga (alpha anchor)",
-    "Fraga_diff": "Fraga (diff extrapolation)",
+    "Deuber": "Causal Hill (mult extrapolation)",
+    "Deuber_diff": "Causal Hill (diff extrapolation)",
+    "Fraga_alpha": "Causal Fraga (mult extrapolation)",
+    "Fraga_diff": "Causal Fraga (diff extrapolation)",
 }
 
 
@@ -159,12 +159,14 @@ def summarize(results, truth):
 def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
                   k_grid_by_n, out_dir):
     """一个模型两张图（均值、MSE 分开）：行 = 样本量 n、列 = tau_n 水平，
-    子图横轴 = k（top observations），纵轴为指标（对数刻度），每方法一条折线。
+    子图横轴 = k（top observations），每方法一条折线。MSE 图与 H1 的均值图
+    用对数刻度（主刻度 10 倍、无小刻度），H2/H3 的均值图用线性刻度。
     横纵坐标说明放在图的最外层；行标签 n 在最右列 y 轴右侧；
     τ_n 标识只在第一行顶部显示。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import LogLocator, NullLocator
 
     out_dir.mkdir(parents=True, exist_ok=True)
     n_tau = len(tau_names)
@@ -183,7 +185,12 @@ def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
                             for k in ks]
                     ax.plot(ks, vals, marker="o", markersize=2.5, linewidth=1.2,
                             color=COLORS[m], label=LABELS[m])
-                ax.set_yscale("log")
+                # H1 均值图与全部 MSE 图用对数刻度（主刻度固定为 10 的整数
+                # 次幂、10 倍间距，关闭小刻度）；H2/H3 均值图用线性刻度
+                if metric == "mse" or (metric == "mean" and model == "H1"):
+                    ax.set_yscale("log")
+                    ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0,)))
+                    ax.yaxis.set_minor_locator(NullLocator())
                 if metric == "mean":
                     ax.axhline(truth[n][name], color="black", linestyle="--",
                                linewidth=1.2, alpha=0.7, label="true QTE")

@@ -72,10 +72,10 @@ COLORS = {
     "Fraga_diff": "#7030a0",
 }
 LABELS = {
-    "Deuber": "Deuber (Hill)",
-    "Deuber_diff": "Deuber (diff extrapolation)",
-    "Fraga_alpha": "Fraga (alpha anchor)",
-    "Fraga_diff": "Fraga (diff extrapolation)",
+    "Deuber": "Causal Hill (mult extrapolation)",
+    "Deuber_diff": "Causal Hill (diff extrapolation)",
+    "Fraga_alpha": "Causal Fraga (mult extrapolation)",
+    "Fraga_diff": "Causal Fraga (diff extrapolation)",
 }
 
 
@@ -198,7 +198,7 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.ticker import LogLocator
+        from matplotlib.ticker import LogLocator, NullLocator
         from matplotlib.patches import Patch
     except ImportError as e:
         print(f"[Warning] matplotlib unavailable, skip plotting: {e}")
@@ -249,9 +249,11 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                     # τ_n 标识只在第一行子图顶部显示
                     if r == 0:
                         ax.set_title(rf"$\tau_n = {tau_formulas[name]}$")
-                    # 两图均用对数刻度；估计量图加真实 QTE 参考线（需为正，负时自动不显示）
+                    # 两图均用对数刻度：主刻度固定为 10 的整数次幂（10 倍间距），
+                    # 关闭小刻度；估计量图加真实 QTE 参考线（需为正，负时自动不显示）
                     ax.set_yscale("log")
-                    ax.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
+                    ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0,)))
+                    ax.yaxis.set_minor_locator(NullLocator())
                     if is_est and truth_qte > 0:
                         ax.axhline(truth_qte, color="black", linestyle="--",
                                    linewidth=1.2, alpha=0.7)
@@ -261,7 +263,7 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                         ax.set_ylabel(f"n = {n}", fontsize=11)
                         ax.yaxis.set_label_position("right")
             # 最外层横纵坐标说明
-            fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
+            fig.supxlabel(r"location shift $u$", fontsize=13, y=0.04)
             fig.supylabel(metric, fontsize=13)
             handles = [Patch(facecolor=COLORS[m], label=LABELS[m]) for m in METHODS]
             if is_est:

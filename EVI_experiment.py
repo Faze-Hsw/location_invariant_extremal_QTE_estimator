@@ -172,7 +172,7 @@ def plot_shift_boxplots(all_results, theory, models, sample_sizes, shifts, out_d
                         ax.set_ylabel(f"n = {n}", fontsize=11)
                         ax.yaxis.set_label_position("right")
             # 最外层横纵坐标说明
-            fig.supxlabel(r"location shift $\mu$", fontsize=13, y=0.04)
+            fig.supxlabel(r"location shift $u$", fontsize=13, y=0.04)
             fig.supylabel(metric, fontsize=13)
             handles = [Patch(facecolor=colors[name], label=est_labels[name])
                        for name in est_names]
