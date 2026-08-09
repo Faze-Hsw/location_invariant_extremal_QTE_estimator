@@ -40,13 +40,13 @@ import os
 import sys
 from pathlib import Path
 
-# 限制每个 worker 进程内部的 BLAS/OpenMP 线程数为 1（须在 import numpy 前设置）
+# 限制每个 worker 进程内部的 BLAS/OpenMP 线程数为 2（须在 import numpy 前设置）
 os.environ.update({
-    "OMP_NUM_THREADS": "1",
-    "OPENBLAS_NUM_THREADS": "1",
-    "MKL_NUM_THREADS": "1",
-    "VECLIB_MAXIMUM_THREADS": "1",
-    "NUMEXPR_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "2",
+    "OPENBLAS_NUM_THREADS": "2",
+    "MKL_NUM_THREADS": "2",
+    "VECLIB_MAXIMUM_THREADS": "2",
+    "NUMEXPR_NUM_THREADS": "2",
 })
 
 import numpy as np
@@ -437,13 +437,11 @@ def plot_coverage(coverage_by, tau_names, tau_formulas,
                               label=f"nominal level {conf_level:.0%}"))
     handles.append(plt.Line2D([0], [0], color="gray", marker="_", ls="",
                               label="error bar: 95% Wilson CI"))
-    # 5 个方法一行；nominal level 与 error bar 说明放第二行居中。
-    # 图例置于 figure 顶部预留区（rect top 下调，避免压到第一行 τ_n 标题）
+    # 图例放图片最上方；模型标识放在图例下方、τ_n 标题上方
     fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.99),
                ncol=5, fontsize=8, frameon=False, alignment="center")
-    # 模型标识放图片最下方居中
-    fig.text(0.5, 0.015, model, ha="center", va="bottom", fontsize=13)
-    fig.tight_layout(rect=(0.03, 0.05, 0.97, 0.82))
+    fig.text(0.5, 0.87, model, ha="center", va="center", fontsize=13)
+    fig.tight_layout(rect=(0.03, 0.05, 0.97, 0.84))
     out_path = out_dir / f"QTE_ci_cov_{model}.png"
     fig.savefig(out_path, dpi=150)
     print(f"Coverage plot saved: {out_path}")
