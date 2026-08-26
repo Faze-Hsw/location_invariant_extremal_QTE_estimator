@@ -8,35 +8,35 @@ build/
 dist/
 *.so
 
-# ============ 虚拟环境 ============
+# ============ Virtual environment ============
 .venv/
 venv/
 env/
 ENV/
 
-# ============ 模拟实验输出（可复现，不入库） ============
+# ============ Simulation experiment output (reproducible, not committed) ============
 results/
 output/
 data/output/
 *.npz
 *.h5
 
-# ============ 测试 / 临时 ============
+# ============ Test / temporary ============
 .pytest_cache/
 .mypy_cache/
 *.log
 .tmp/
 
-# ============ IDE / 编辑器 ============
+# ============ IDE / editor ============
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# ============ CodeBuddy 项目数据（IDE 元数据） ============
+# ============ CodeBuddy project data (IDE metadata) ============
 .codebuddy/
 
-# ============ 系统文件 ============
+# ============ System files ============
 .DS_Store
 Thumbs.db
 desktop.ini
