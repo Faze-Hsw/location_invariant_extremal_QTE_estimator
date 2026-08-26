@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""计算各模型下潜在结果 Y1(处理组) / Y0(对照组) 的真实（理论）分位数。
+"""Compute the true (theoretical) quantiles of the potential outcomes Y1 (treated) / Y0 (control)
+under each model.
 
-真实分位数 q_{Y_j}(τ) 满足 P(Y_j <= q) = τ。Y_j 的边际分布是 X~U[0,1]
-上的条件分布混合:
+The true quantile q_{Y_j}(τ) satisfies P(Y_j <= q) = τ. The marginal distribution of Y_j is the
+mixture of the conditional distributions over X~U[0,1]:
 
     F_{Y_j}(q) = ∫_0^1 F_{Y_j|X=x}(q) dx
 
-用 scipy.integrate.quad 数值积分得到边际 CDF，再用 brentq 对 F(q) - τ = 0
-求根。可用于与 IPW 经验分位数估计 (estimate_quantile_empirical.py) 对比，
-衡量偏差、方差与覆盖率。
+Numerically integrate with scipy.integrate.quad to get the marginal CDF, then find the root of
+F(q) - τ = 0 with brentq. Can be used to compare against the IPW empirical quantile estimator
+(estimate_quantile_empirical.py) to measure bias, variance and coverage.
 
-输入: 目标分位数 τ（标量或数组）
-输出: H1/H2/H3 模型下对照组 (j=0) 与处理组 (j=1) 的真实分位数
+Input:  target quantile τ (scalar or array)
+Output: true quantiles of the control group (j=0) and treated group (j=1) under models H1/H2/H3
 """
 from pathlib import Path
 
@@ -25,19 +26,19 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "data_generat
 
 
 def load_config(path: str = CONFIG_PATH) -> dict:
-    """读取数据生成配置文件。"""
+    """Load the data generation config file."""
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def marginal_cdf(cfg: dict, model: str, j: int, q: float) -> float:
-    """边际 CDF F_{Y_j}(q) = ∫_0^1 F_{Y_j|X=x}(q) dx。
+    """Marginal CDF F_{Y_j}(q) = ∫_0^1 F_{Y_j|X=x}(q) dx.
 
-    j=1 处理组 (Y1), j=0 对照组 (Y0)。
+    j=1 treated group (Y1), j=0 control group (Y0).
     """
     model_cfg = cfg["outcome_models"][model]
-    mu = float(cfg.get("design", {}).get("mu", 0.0))   # 共享位置偏移 μ
-    q0 = q - mu                                        # F_{Y}(q) = F_{原Y}(q - μ)
+    mu = float(cfg.get("design", {}).get("mu", 0.0))   # shared location shift μ
+    q0 = q - mu                                        # F_{Y}(q) = F_{original Y}(q - μ)
 
     if model == "H1":
         # Y(j) = μ + coef·S(1+X), S ~ t(df)
@@ -65,27 +66,27 @@ def marginal_cdf(cfg: dict, model: str, j: int, q: float) -> float:
             q0, b=eval(shape_formula, {"X": x}), loc=0.0, scale=scale)
 
     else:
-        raise ValueError(f"未知模型: {model}")
+        raise ValueError(f"Unknown model: {model}")
 
     val, _ = quad(integrand, 0.0, 1.0)
     return float(np.clip(val, 0.0, 1.0))
 
 
 def real_quantile(cfg: dict, model: str, j: int, tau: float) -> float:
-    """解 F_{Y_j}(q) = tau，返回真实分位数 q。"""
+    """Solve F_{Y_j}(q) = tau and return the true quantile q."""
     def f(q):
         return marginal_cdf(cfg, model, j, q) - tau
 
-    # 从 q=0 出发自动扩展 bracket
+    # automatically expand the bracket starting from q=0
     if abs(f(0.0)) < 1e-14:
         return 0.0
-    if f(0.0) > 0:  # 需向负方向扩展
+    if f(0.0) > 0:  # need to expand in the negative direction
         a, step = 0.0, 1.0
         while f(a) > 0 and a > -1e9:
             a -= step
             step *= 2.0
         return brentq(f, a, 0.0, xtol=1e-12, rtol=1e-12)
-    # 需向正方向扩展
+    # need to expand in the positive direction
     b, step = 0.0, 1.0
     while f(b) < 0 and b < 1e9:
         b += step
@@ -94,9 +95,9 @@ def real_quantile(cfg: dict, model: str, j: int, tau: float) -> float:
 
 
 def compute_real_quantiles(cfg: dict, taus):
-    """对全部模型与 j=0/1 计算真实分位数。
+    """Compute the true quantiles for all models and j=0/1.
 
-    返回 dict: result[model][j][tau] = q
+    Returns dict: result[model][j][tau] = q
     """
     result = {}
     for model in cfg["outcome_models"]:
@@ -112,18 +113,19 @@ if __name__ == "__main__":
     cfg = load_config()
     n = cfg["design"]["sample_sizes"][0]
 
-    # 目标分位数：由配置文件中的公式代入 n 得到（也可在此修改为自定义数组）
+    # target quantiles: obtained by substituting n into the config formulas (may also be changed
+    # to a custom array here)
     taus = []
     for q in cfg["design"]["quantile_levels"]:
         taus.append(eval(q["formula"], {"n": n, "log": np.log}))
 
     print("=" * 76)
-    print(f"真实（理论）分位数  n={n}")
+    print(f"true (theoretical) quantiles  n={n}")
     print("=" * 76)
 
     for model in cfg["outcome_models"]:
         print(f"\n[{model}]")
-        print(f"  {'tau':<12}{'q_treated(真实)':>18}{'q_control(真实)':>18}{'真实QTE':>16}")
+        print(f"  {'tau':<12}{'q_treated(true)':>18}{'q_control(true)':>18}{'true QTE':>16}")
         print(f"  {'-' * 64}")
         for tau in taus:
             q1 = real_quantile(cfg, model, 1, tau)

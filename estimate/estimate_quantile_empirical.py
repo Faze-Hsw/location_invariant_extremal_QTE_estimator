@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
-"""经验分位数估计量（IPW 加权）。
+"""Empirical quantile estimator (IPW-weighted).
 
-公式 (来自论文):
+Formula (from the paper):
     q_hat_j(tau) = argmin_q Σ_i [D_i/π̂(X_i)]^j [(1-D_i)/(1-π̂(X_i))]^(1-j)
                                   · (Y_i - q)(tau - 1{Y_i ≤ q})
-    j=1: 处理组 IPW 分位数,  权重 w_i = D_i / π̂(X_i)
-    j=0: 对照组 IPW 分位数,  权重 w_i = (1-D_i) / (1-π̂(X_i))
+    j=1: treated-group IPW quantile,  weight w_i = D_i / π̂(X_i)
+    j=0: control-group IPW quantile,  weight w_i = (1-D_i) / (1-π̂(X_i))
 
-argmin 等价于求解加权经验 CDF:  找 q 使  Σ w_i 1{Y_i ≤ q} = tau · Σ w_i
-实现: 排序 Y 后累积权重, 用 searchsorted 找第一个累积权重 ≥ tau·total 的位置。
+The argmin is equivalent to solving the weighted empirical CDF: find q such that
+Σ w_i 1{Y_i ≤ q} = tau · Σ w_i.
+Implementation: sort Y and accumulate weights, then use searchsorted to find the first position
+where the cumulative weight ≥ tau·total.
 
-输入:  含 Y, D, pi_estimate 字段的 dict（一维数组）
-输出:  给定 tau 下的处理组和对照组经验分位数估计
+Input:  dict containing Y, D, pi_estimate fields (1-D arrays)
+Output: empirical quantile estimates of the treated and control groups at the given tau
 """
 from pathlib import Path
 import sys
@@ -20,7 +22,7 @@ import numpy as np
 
 
 def weighted_quantile(Y, weights, tau):
-    """加权经验分位数：找 q 使 cum_w(q)/total_w >= tau 的最小 Y 排序值。"""
+    """Weighted empirical quantile: the smallest sorted Y value with cum_w(q)/total_w >= tau."""
     Y = np.asarray(Y).ravel()
     weights = np.asarray(weights, dtype=float).ravel()
     if Y.size == 0:
@@ -40,27 +42,27 @@ def weighted_quantile(Y, weights, tau):
 
 
 def estimate_quantile_ipw(data, tau):
-    """估计处理组 (j=1) 和对照组 (j=0) 在分位数水平 tau 下的 IPW 分位数。
+    """Estimate the IPW quantiles of the treated group (j=1) and control group (j=0) at quantile level tau.
 
-    data: 需包含 Y, D, pi_estimate 三个一维字段
-    tau:  目标分位数水平，标量，取值 (0, 1)
+    data: must contain the three 1-D fields Y, D, pi_estimate
+    tau:  target quantile level, scalar, in (0, 1)
 
-    返回 dict {tau, q_treated, q_control, n_treated, n_control, qte}。
+    Returns dict {tau, q_treated, q_control, n_treated, n_control, qte}.
     """
     Y = np.asarray(data["Y"]).ravel()
     D = np.asarray(data["D"]).ravel()
     pi = np.asarray(data["pi_estimate"]).ravel()
 
-    # 截断避免除零
+    # truncate to avoid division by zero
     eps = 1e-6
     pi_c = np.clip(pi, eps, 1.0 - eps)
 
-    # 处理组 (j=1)
+    # treated group (j=1)
     mask_t = (D == 1)
     w_t = 1.0 / pi_c[mask_t]
     q_treated = weighted_quantile(Y[mask_t], w_t, tau)
 
-    # 对照组 (j=0)
+    # control group (j=0)
     mask_c = (D == 0)
     w_c = 1.0 / (1.0 - pi_c[mask_c])
     q_control = weighted_quantile(Y[mask_c], w_c, tau)
@@ -89,9 +91,9 @@ if __name__ == "__main__":
     data, h_n, info = estimate_propensity_sieve(data)
 
     print("=" * 72)
-    print(f"[测试] 模型={first_model}, n={first_n}")
-    print(f"  筛基 h_n={h_n}, 处理组={int((data['D']==1).sum())}, "
-          f"对照组={int((data['D']==0).sum())}")
+    print(f"[test] model={first_model}, n={first_n}")
+    print(f"  sieve basis h_n={h_n}, treated group={int((data['D']==1).sum())}, "
+          f"control group={int((data['D']==0).sum())}")
 
     print(f"\n  {'τ_n':<22}{'q_treated':>14}{'q_control':>14}{'QTE':>14}")
     print(f"  {'-' * 64}")
