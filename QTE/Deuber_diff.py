@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
-"""差分外推法（difference extrapolation）极端分位数处理效应 (QTE) 估计量。
+"""Difference-extrapolation extreme quantile treatment effect (QTE) estimator.
 
-利用两个中间水平锚点 q_j(1-α_n)、q_j(1-β_n) 的差分按极值指数 γ_j 做外推:
+Use the difference of two intermediate-level anchors q_j(1-α_n), q_j(1-β_n) to extrapolate
+by the extreme value index γ_j:
 
     Q_j(1-τ_n) ≈ q_j(1-α_n)
                  + [q_j(1-β_n) - q_j(1-α_n)] · ( (α_n/τ_n)^{γ_j} - 1 )
                                                  -------------------------
                                                  ( (α_n/β_n)^{γ_j} - 1 )
-γ→0 时按 L'Hôpital 取极限，斜率 → log(α/τ) / log(α/β)。
+As γ→0 take the limit by L'Hôpital, giving slope → log(α/τ) / log(α/β).
 
-锚点分位数: IPW 加权经验分位数（分位数水平 1-α_n 与 1-β_n）。
-极值指数:   Causal Hill 估计量 γ̂_j^H（EVI/causal_hill.py 的 estimate_evi_causal_hill）。
+Anchor quantiles: IPW-weighted empirical quantiles (quantile levels 1-α_n and 1-β_n).
+Extreme value index: Causal Hill estimator γ̂_j^H (estimate_evi_causal_hill in EVI/causal_hill.py).
 
-输入: 含 Y, D, pi_estimate 字段的 dict（一维数组）
-输出: 目标极端水平 τ（分位数水平 1-τ）下外推的处理组/对照组分位数及 QTE
+Input:  dict with fields Y, D, pi_estimate (1-D arrays)
+Output: extrapolated treated/control-group quantiles and the QTE at the target extreme level
+        τ (quantile level 1-τ)
 """
 from pathlib import Path
 import sys
@@ -25,7 +27,7 @@ from causal_hill import estimate_evi_causal_hill  # noqa: E402
 
 
 def weighted_quantile(Y, weights, tau):
-    """加权经验分位数：找 q 使 cum_w(q)/total_w >= tau 的最小 Y 排序值。"""
+    """Weighted empirical quantile: the smallest sorted Y value with cum_w(q)/total_w >= tau."""
     Y = np.asarray(Y).ravel()
     weights = np.asarray(weights, dtype=float).ravel()
     if Y.size == 0:
@@ -45,65 +47,66 @@ def weighted_quantile(Y, weights, tau):
 
 
 def difference_extrapolate(q_alpha, q_beta, alpha_n, beta_n, tau_target, gamma):
-    """差分外推: q̂(1-τ) = q̂(1-α) + [q̂(1-β) - q̂(1-α)] · ((α/τ)^γ - 1)/((α/β)^γ - 1)。
+    """Difference extrapolation: q̂(1-τ) = q̂(1-α) + [q̂(1-β) - q̂(1-α)] · ((α/τ)^γ - 1)/((α/β)^γ - 1).
 
-    gamma ≈ 0 时用极限 log(α/τ) / log(α/β)。
+    When gamma ≈ 0, use the limit log(α/τ) / log(α/β).
     """
-    rt = (alpha_n / tau_target) ** gamma
-    rb = (alpha_n / beta_n) ** gamma
-    if abs(rb - 1.0) < 1e-12:            # γ ≈ 0，0/0 → L'Hôpital
+    if abs(gamma) < 1e-12:
+        # γ ≈ 0, 0/0 → L'Hôpital
         slope = np.log(alpha_n / tau_target) / np.log(alpha_n / beta_n)
     else:
-        slope = (rt - 1.0) / (rb - 1.0)
+        num = (alpha_n / tau_target) ** gamma - 1.0
+        den = (alpha_n / beta_n) ** gamma - 1.0
+        slope = num / den
     return q_alpha + (q_beta - q_alpha) * slope
 
 
-def estimate_qte_diff(data, alpha_n, beta_n, tau_target, gamma=None,
-                      beta_treated=None, beta_control=None):
-    """差分外推法估计极端分位数处理效应（Hill 极值指数版）。
+def estimate_qte_diff(data, alpha_n, beta_n, tau_target,
+                      beta_treated=None, beta_control=None, gamma=None):
+    """Estimate the extreme quantile treatment effect by difference extrapolation.
 
-    data          : dict，需含 Y, D, pi_estimate 三个一维字段
-    alpha_n       : 锚点水平一（中间，上尾概率），锚点分位数为 q̂_j(1-α_n)
-    beta_n        : 锚点水平二（更深，上尾概率，需 beta_n < alpha_n），锚点分位数为 q̂_j(1-β_n)
-    tau_target    : 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
-                    一般用于 tau_target < beta_n（外推到比两锚点更极端的尾部）
-    gamma         : 可选的极值指数 dict {gamma_treated, gamma_control}；
-                    缺省时用 Causal Hill 估计量（estimate_evi_causal_hill）计算
-    beta_treated  : 可选，处理组各自的 β_n（分组 k0 时传入，锚点 q̂_j(1-β) 也分组）
-    beta_control  : 可选，对照组各自的 β_n（分组 k0 时传入）
+    data      : dict containing Y, D, pi_estimate (three 1-D fields)
+    alpha_n   : first anchor level (upper-tail probability), anchor quantile q̂_j(1-α_n)
+    beta_n    : second anchor level (upper-tail probability), anchor quantile q̂_j(1-β_n)
+    tau_target: target extreme level (upper-tail probability), scalar or array, must be positive
+    beta_treated/beta_control: optional group-specific β_n (for the group-adaptive Fraga estimate)
+    gamma     : optional extreme value index dict {gamma_treated, gamma_control};
+                by default computed with the Causal Hill estimator
 
-    返回 dict {alpha_n, beta_n, tau, q_anchor_alpha_treated, q_anchor_alpha_control,
-              q_anchor_beta_treated, q_anchor_beta_control,
-              gamma_treated, gamma_control,
-              q_treated_ext, q_control_ext, qte_ext}。
-    tau 为数组时 q_*_ext 与 qte_ext 也返回数组。
+    Returns dict {alpha_n, beta_n, tau, q_anchor_alpha_treated, q_anchor_beta_treated,
+              q_anchor_alpha_control, q_anchor_beta_control, gamma_treated, gamma_control,
+              q_treated_ext, q_control_ext, qte_ext}.
+    When tau is an array, q_*_ext and qte_ext are also arrays.
     """
     Y = np.asarray(data["Y"]).ravel()
     D = np.asarray(data["D"]).ravel()
     pi = np.asarray(data["pi_estimate"]).ravel()
+    n = Y.size
     taus = np.atleast_1d(np.asarray(tau_target, dtype=float))
     if np.any(taus <= 0):
-        raise ValueError("tau_target 需为正（tau > 0）")
-    beta_t = float(beta_treated) if beta_treated is not None else float(beta_n)
-    beta_c = float(beta_control) if beta_control is not None else float(beta_n)
-    if not (0.0 < beta_t < alpha_n) or not (0.0 < beta_c < alpha_n):
-        raise ValueError("需满足 0 < beta_n < alpha_n")
+        raise ValueError("tau_target must be positive (tau > 0)")
+    if not (0.0 < beta_n < alpha_n):
+        raise ValueError("must satisfy 0 < beta_n < alpha_n")
 
     eps = 1e-6
     pi_c = np.clip(pi, eps, 1.0 - eps)
+
+    beta_t = float(beta_treated) if beta_treated is not None else float(beta_n)
+    beta_c = float(beta_control) if beta_control is not None else float(beta_n)
 
     mask_t = (D == 1)
     mask_c = (D == 0)
     w_t = 1.0 / pi_c[mask_t]
     w_c = 1.0 / (1.0 - pi_c[mask_c])
 
-    # 两个锚点中间水平分位数（IPW 加权；β 锚点按组取 q̂_j(1-β_j)）
+    # two intermediate anchor-level quantiles (IPW-weighted; the β anchor uses the
+    # group-specific q̂_j(1-β_j))
     q_alpha_t = weighted_quantile(Y[mask_t], w_t, 1.0 - alpha_n)
-    q_alpha_c = weighted_quantile(Y[mask_c], w_c, 1.0 - alpha_n)
     q_beta_t = weighted_quantile(Y[mask_t], w_t, 1.0 - beta_t)
+    q_alpha_c = weighted_quantile(Y[mask_c], w_c, 1.0 - alpha_n)
     q_beta_c = weighted_quantile(Y[mask_c], w_c, 1.0 - beta_c)
 
-    # 极值指数：缺省用 Causal Hill（仅依赖 α_n）
+    # extreme value index: use Causal Hill by default (depends only on α_n)
     if gamma is None:
         hill = estimate_evi_causal_hill(data, alpha_n)
         gamma_t = hill["gamma_treated"]
@@ -112,10 +115,10 @@ def estimate_qte_diff(data, alpha_n, beta_n, tau_target, gamma=None,
         gamma_t = float(gamma["gamma_treated"])
         gamma_c = float(gamma["gamma_control"])
 
-    q_ext_t = np.array([difference_extrapolate(
-        q_alpha_t, q_beta_t, alpha_n, beta_t, t, gamma_t) for t in taus])
-    q_ext_c = np.array([difference_extrapolate(
-        q_alpha_c, q_beta_c, alpha_n, beta_c, t, gamma_c) for t in taus])
+    q_ext_t = np.array([difference_extrapolate(q_alpha_t, q_beta_t, alpha_n, beta_t, t, gamma_t)
+                        for t in taus])
+    q_ext_c = np.array([difference_extrapolate(q_alpha_c, q_beta_c, alpha_n, beta_c, t, gamma_c)
+                        for t in taus])
     qte_ext = q_ext_t - q_ext_c
 
     def _scalar_or_array(arr):
@@ -126,8 +129,8 @@ def estimate_qte_diff(data, alpha_n, beta_n, tau_target, gamma=None,
         "beta_n": float(beta_n),
         "tau": _scalar_or_array(taus),
         "q_anchor_alpha_treated": float(q_alpha_t),
-        "q_anchor_alpha_control": float(q_alpha_c),
         "q_anchor_beta_treated": float(q_beta_t),
+        "q_anchor_alpha_control": float(q_alpha_c),
         "q_anchor_beta_control": float(q_beta_c),
         "gamma_treated": gamma_t,
         "gamma_control": gamma_c,
@@ -143,19 +146,19 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from data_generation import load_config, generate_dataset, tau_levels
     from estimate_propensity_sieve import estimate_propensity_sieve
+    from estimate_k0 import fallback_beta
 
     cfg = load_config()
     seed = cfg["experiment"]["random_seed"]
     first_model = list(cfg["outcome_models"])[0]
     first_n = cfg["design"]["sample_sizes"][0]
 
-    # 锚点水平 α_n 取自配置，β_n 统一取 k0 = k^(2/3)（k = n·α_n = n^0.65，由配置
-    # k0_deuber_diff_formula 指定），不随 Fraga 分组自适应估计；
-    # 目标极端水平 τ 取自配置中所有 tau_n_* 水平
+    # anchor level α_n from the config; β_n takes the fixed k0 = k^(2/3) (k = n·α_n = n^0.65,
+    # specified by k0_deuber_diff_formula in the config) and does not follow the adaptive
+    # group-specific Fraga estimate; target extreme level τ from all tau_n_* levels in the config
     levels = dict(tau_levels(cfg, first_n))
     alpha_n = levels["alpha_n"]
-    k0_dd = eval(cfg["design"]["k0_deuber_diff_formula"], {"n": first_n, "log": np.log})
-    beta_n = float(k0_dd) / first_n
+    beta_n = fallback_beta(cfg, first_n)   # fallback β_n (second anchor level)
     target_levels = [(name, levels[name]) for name in levels if name.startswith("tau_n")]
     target_taus = [t for _, t in target_levels]
 
@@ -163,22 +166,22 @@ if __name__ == "__main__":
     data, h_n, info = estimate_propensity_sieve(data)
 
     print("=" * 92)
-    print(f"[测试] 模型={first_model}, n={first_n}, h_n={h_n}")
-    print(f"  锚点水平 alpha_n = {alpha_n:.4e}, beta_n = {beta_n:.4e}")
+    print(f"[test] model={first_model}, n={first_n}, h_n={h_n}")
+    print(f"  anchor level alpha_n = {alpha_n:.4e}, beta_n = {beta_n:.4e}")
 
     res = estimate_qte_diff(data, alpha_n, beta_n, target_taus)
-    print(f"  锚点分位数: q1(1-a)={res['q_anchor_alpha_treated']:12.3f}, "
+    print(f"  anchor quantile: q1(1-a)={res['q_anchor_alpha_treated']:12.3f}, "
           f"q1(1-b)={res['q_anchor_beta_treated']:12.3f}")
     print(f"  Hill EVI:   gamma_1^H={res['gamma_treated']:.4f}, "
           f"gamma_0^H={res['gamma_control']:.4f}")
 
-    print("\n  [差分外推 QTE (Hill)]（目标水平取自配置文件，显示 1-tau 对应的分位数水平）")
-    print(f"  {'name':<12}{'tau(上尾)':<14}{'1-tau':<16}"
+    print("\n  [difference-extrapolation QTE (Hill)] (target levels from the config, showing the quantile level 1-tau)")
+    print(f"  {'name':<12}{'tau (upper tail)':<16}{'1-tau':<16}"
           f"{'q_treated':>16}{'q_control':>16}{'QTE':>16}")
-    print(f"  {'-' * 90}")
+    print(f"  {'-' * 92}")
     for i, (name, t) in enumerate(target_levels):
         q_level = 1.0 - t
-        print(f"  {name:<12}{t:<14.3e}{q_level:<16.6f}"
+        print(f"  {name:<12}{t:<16.3e}{q_level:<16.6f}"
               f"{np.asarray(res['q_treated_ext'])[i]:16.4f}"
               f"{np.asarray(res['q_control_ext'])[i]:16.4f}"
               f"{np.asarray(res['qte_ext'])[i]:16.4f}")

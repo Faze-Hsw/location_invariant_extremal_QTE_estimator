@@ -1,38 +1,44 @@
 # -*- coding: utf-8 -*-
-"""四种 QTE 估计量的置信区间覆盖率 Monte Carlo 实验（固定 location shift u = 0）。
+"""Confidence interval coverage Monte Carlo experiment for the QTE estimators (fixed location shift u = 0).
 
-固定 u = 0，重复 R 次：
-  1. 生成原始样本并筛倾向得分，用原始样本得到四种方法的 QTE 点估计 q̂；
-  2. Bootstrap 重采样 B 次（每次重估倾向得分与 Fraga 分组 k0，二者只依赖
-     X/D 与 μ=0 数据，对所有场景复用），得到 q̂*_b，标准误 se = std(q̂*_b)；
-  3. 正态近似置信区间 CI = q̂ ± z_{1-α/2}·se，名义置信水平 1-α 读自
-     配置 inference.confidence_level（默认 0.9）；
-  4. 覆盖率 = 1{真实 QTE ∈ CI} 的 Monte Carlo 均值（忽略点估计或 se 非有限的重复）。
+With u fixed at 0, repeat R times:
+  1. Generate the original sample and estimate the propensity score by sieves, then obtain the
+     QTE point estimates q̂ of the methods from the original sample;
+  2. Bootstrap-resample B times (each time re-estimating the propensity score and the Fraga group
+     k0, both of which depend only on X/D and the μ=0 data and are reused across all scenarios),
+     yielding q̂*_b with standard error se = std(q̂*_b);
+  3. Normal-approximation confidence interval CI = q̂ ± z_{1-α/2}·se, with the nominal confidence
+     level 1-α read from the config inference.confidence_level (default 0.9);
+  4. Coverage = the Monte Carlo mean of 1{true QTE ∈ CI} (ignoring repetitions whose point
+     estimate or se is not finite).
 
-覆盖率估计本身的不确定性：用 Wilson 区间（默认 95%）报告，绘图误差棒 = 区间。
+The uncertainty of the coverage estimate itself is reported with a Wilson interval (default 95%),
+and the plot error bars are that interval.
 
-方法（与 QTE_experiment.py 一致）：
-  - Deuber            : Hill EVI + Weissman 外推（锚点 alpha_n）
-  - Deuber_diff       : Hill EVI + 差分外推（双锚点 alpha_n / beta_n）
-  - Fraga_alpha       : Fraga EVI + Weissman 幂外推（锚点 alpha_n）
-  - Fraga_diff        : Fraga EVI + 差分外推（双锚点 alpha_n / beta_n）
-  - Fraga_diff_asymp  : Fraga EVI + 差分外推 + 解析标准误（论文公式 18-22，CI 公式 22）
+Methods (consistent with QTE_experiment.py):
+  - Deuber            : Hill EVI + Weissman extrapolation (anchor alpha_n)
+  - Deuber_diff       : Hill EVI + difference extrapolation (two anchors alpha_n / beta_n)
+  - Fraga_alpha       : Fraga EVI + Weissman power extrapolation (anchor alpha_n)
+  - Fraga_diff        : Fraga EVI + difference extrapolation (two anchors alpha_n / beta_n)
+  - Fraga_diff_asymp  : Fraga EVI + difference extrapolation + analytic standard error
+                        (equations 18-22 in the paper, CI equation 22)
 
-真实 QTE = q_{Y1}(1-τ) - q_{Y0}(1-τ) 由 QTE_real.py 给出，平移不变、不随 u 变化。
+The true QTE = q_{Y1}(1-τ) - q_{Y0}(1-τ) is given by QTE_real.py; it is translation-invariant
+and does not depend on u.
 
-绘图：每个模型一张图，行 = 样本量 n、列 = tau_n 水平，子图横轴 = 各方法、
-纵轴 = 覆盖率（固定 [0,1]），每种方法一个点估计 + Wilson 误差棒，并画名义
-置信水平参考线。
+Plotting: one figure per model, rows = sample size n, columns = tau_n levels, subplot x-axis =
+the methods, y-axis = coverage (fixed [0,1]), one point estimate + Wilson error bar per method,
+plus the nominal confidence level reference line.
 
-CLI 参数（均可选，默认读配置文件）：
-  --replications R         Monte Carlo 重复次数
-  --sample-sizes n1 n2..   样本量列表
-  --bootstrap B            bootstrap 重采样次数
-  --workers W              并行进程数
+CLI args (all optional, defaults from the config):
+  --replications R         number of Monte Carlo repetitions
+  --sample-sizes n1 n2..   list of sample sizes
+  --bootstrap B            number of bootstrap resamples
+  --workers W              number of parallel processes
 
-location shift 固定为常值 u = 0（不提供 --shifts 参数）。
+The location shift is fixed at the constant u = 0 (no --shifts argument is provided).
 
-运行:
+Run:
   D:\\Miniconda\\python.exe QTE_ci_experiment.py
   D:\\Miniconda\\python.exe QTE_ci_experiment.py --replications 200 --bootstrap 200
 """
@@ -40,7 +46,7 @@ import os
 import sys
 from pathlib import Path
 
-# 限制每个 worker 进程内部的 BLAS/OpenMP 线程数为 2（须在 import numpy 前设置）
+# Limit the BLAS/OpenMP threads inside each worker process to 2 (must be set before importing numpy)
 os.environ.update({
     "OMP_NUM_THREADS": "2",
     "OPENBLAS_NUM_THREADS": "2",
@@ -51,7 +57,7 @@ os.environ.update({
 
 import numpy as np
 
-# 依赖仓库内脚本
+# import repo-local scripts
 _BASE = Path(__file__).resolve().parent
 for _sub in ("data", "estimate", "EVI", "QTE"):
     sys.path.insert(0, str(_BASE / _sub))
@@ -86,11 +92,11 @@ LABELS = {
 
 
 def estimate_qte_by_method(data, tau, alpha_n, beta_fb, beta_deuber_diff, k0res):
-    """单个样本上估计四种方法在目标水平 tau 处的 QTE（标量 tau）。
+    """Estimate the QTE of the four methods at target level tau on a single sample (scalar tau).
 
-    data : dict，含 Y, D, pi_estimate
-    k0res: estimate_k0_by_group 的结果（Fraga 分组自适应 β_t/β_c）
-    返回 {method: qte}（估计失败时可为 nan）。
+    data : dict containing Y, D, pi_estimate
+    k0res: the result of estimate_k0_by_group (Fraga group-adaptive β_t/β_c)
+    Returns {method: qte} (may be nan when the estimate fails).
     """
     beta_t = k0res["beta_treated"]
     beta_c = k0res["beta_control"]
@@ -107,23 +113,23 @@ def estimate_qte_by_method(data, tau, alpha_n, beta_fb, beta_deuber_diff, k0res)
 
 
 def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
-    """Fraga 差分外推 + 解析 CI（基于论文公式 (18)-(22)）。
+    """Fraga difference extrapolation + analytic CI (based on equations (18)-(22) in the paper).
 
-    对极端分位数 QTE 用 Fraga EVI + 差分外推得到点估计 Δ̂(1-τ)；
-    解析标准误按公式 (22)：se = σ̂ / φ̂_n，其中
+    For the extreme-quantile QTE, use Fraga EVI + difference extrapolation to get the point
+    estimate Δ̂(1-τ); the analytic standard error follows equation (22): se = σ̂ / φ̂_n, where
 
-        σ̂² = min{1,κ̂}² (γ̂₁^F)² â_{n,1}² + min{1,1/κ̂}² (γ̂₀^F)² â_{n,0}²   (公式 21)
-        φ̂_n = √k0 / [ log(β_n/τ) · max{Q̂₁(1-τ), Q̂₀(1-τ)} ]                (公式 18)
-        κ̂   = Q̂₁(1-τ) / Q̂₀(1-τ)                                             (公式 19)
-        â²_{n,j} = (1/k0) Σ_i R̂²_{n,j,i}                                    (公式 20)
+        σ̂² = min{1,κ̂}² (γ̂₁^F)² â_{n,1}² + min{1,1/κ̂}² (γ̂₀^F)² â_{n,0}²   (equation 21)
+        φ̂_n = √k0 / [ log(β_n/τ) · max{Q̂₁(1-τ), Q̂₀(1-τ)} ]                (equation 18)
+        κ̂   = Q̂₁(1-τ) / Q̂₀(1-τ)                                             (equation 19)
+        â²_{n,j} = (1/k0) Σ_i R̂²_{n,j,i}                                    (equation 20)
         R̂_{n,j,i} = (D_i/π̂)^j ((1-D_i)/(1-π̂))^{1-j} 1{Y_i>q̂_j(1-β_n)}
                      · (1/γ̂_j^F) · log[(Y_i - q̂_j(1-α_n)) / (q̂_j(1-β_n) - q̂_j(1-α_n))]
-                     - β_n                                                   (公式 20 内的 R)
+                     - β_n                                                   (R in equation 20)
 
-    解析 CI: Δ̂(1-τ) ± z_{1-α/2} · σ̂ / φ̂_n                                  (公式 22)
+    Analytic CI: Δ̂(1-τ) ± z_{1-α/2} · σ̂ / φ̂_n                                  (equation 22)
 
-    返回 dict {qte, q_treated, q_control, sigma, phi, se, ci}；
-    任一环节出现非有限值则返回 nan（让外层用 nan 标记跳过本次重复）。
+    Returns dict {qte, q_treated, q_control, sigma, phi, se, ci};
+    if any quantity becomes non-finite, returns nan (so the caller marks this repetition with nan).
     """
     Y = np.asarray(data["Y"]).ravel()
     D = np.asarray(data["D"]).ravel()
@@ -145,13 +151,13 @@ def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
     w_t = 1.0 / pi_c[mask_t]
     w_c = 1.0 / (1.0 - pi_c[mask_c])
 
-    # 锚点分位数（与 Fraga_diff 一致；β 锚点按组使用各自的 β_j）
+    # anchor quantiles (consistent with Fraga_diff; the β anchor uses the group-specific β_j)
     q_alpha_t = fraga_wquant(Y[mask_t], w_t, 1.0 - alpha_n)
     q_alpha_c = fraga_wquant(Y[mask_c], w_c, 1.0 - alpha_n)
     q_beta_t = fraga_wquant(Y[mask_t], w_t, 1.0 - beta_t)
     q_beta_c = fraga_wquant(Y[mask_c], w_c, 1.0 - beta_c)
 
-    # Fraga EVI：缺省按 fraga_diff 的方式（β 锚点用 β_t / β_c 各自的 β_n）
+    # Fraga EVI: by default as in fraga_diff (the β anchor uses the respective β_n of β_t / β_c)
     fraga = estimate_evi_causal_fraga(data, beta_fb, alpha_n, beta_t, beta_c)
     gamma_t = fraga["gamma_treated"]
     gamma_c = fraga["gamma_control"]
@@ -160,28 +166,29 @@ def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
         return {"qte": np.nan, "se": np.nan, "sigma": np.nan, "phi": np.nan,
                 "q_treated": np.nan, "q_control": np.nan, "ci": (np.nan, np.nan)}
 
-    # 差分外推点估计（与 Fraga_diff 相同实现）
+    # difference-extrapolation point estimate (same implementation as Fraga_diff)
     q_t = difference_extrapolate(q_alpha_t, q_beta_t, alpha_n, beta_t, tau_target, gamma_t)
     q_c = difference_extrapolate(q_alpha_c, q_beta_c, alpha_n, beta_c, tau_target, gamma_c)
     qte = q_t - q_c
 
-    # === 解析标准误（公式 18–22） ===
-    # k0 用 n · β_n 处理组（与分组 k0 公式保持一致；公式 (20) 用处理组 β_n
-    # 推导时的常数；这里取 n·beta_t，与 fraga 系列 β_t 来自同一自适应估计）。
+    # === analytic standard error (equations 18-22) ===
+    # k0 uses n · β_n of the treated group (consistent with the group k0 formula; equation (20)
+    # uses the treated-group β_n as the constant in the derivation; here n·beta_t is taken, with
+    # beta_t coming from the same adaptive estimate as in the Fraga family).
     k0 = float(n) * beta_t
     if not (k0 > 0):
         return {"qte": np.nan, "se": np.nan, "sigma": np.nan, "phi": np.nan,
                 "q_treated": q_t, "q_control": q_c, "ci": (np.nan, np.nan)}
 
-    # 公式 (20)：按 j 分别算 â²_{n,1} 与 â²_{n,0}。
-    # 处理组 (j=1): 权重 w_t = D/π̂
+    # equation (20): compute â²_{n,1} and â²_{n,0} for j separately.
+    # treated group (j=1): weight w_t = D/π̂
     denom1 = q_beta_t - q_alpha_t
     denom0 = q_beta_c - q_alpha_c
     if not (denom1 > 0 and denom0 > 0):
         return {"qte": qte, "se": np.nan, "sigma": np.nan, "phi": np.nan,
                 "q_treated": q_t, "q_control": q_c, "ci": (np.nan, np.nan)}
 
-    # j=1：处理组（使用 β_t）
+    # j=1: treated group (using β_t)
     ind1 = (Y > q_beta_t) & (D == 1)
     if ind1.any():
         log_term1 = np.log((Y[ind1] - q_alpha_t) / denom1)
@@ -189,7 +196,7 @@ def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
         a_sq_t = float(np.sum(R1 ** 2)) / k0
     else:
         a_sq_t = np.nan
-    # j=0：对照组（使用 β_c）
+    # j=0: control group (using β_c)
     ind0 = (Y > q_beta_c) & (D == 0)
     if ind0.any():
         log_term0 = np.log((Y[ind0] - q_alpha_c) / denom0)
@@ -202,14 +209,14 @@ def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
         return {"qte": qte, "se": np.nan, "sigma": np.nan, "phi": np.nan,
                 "q_treated": q_t, "q_control": q_c, "ci": (np.nan, np.nan)}
 
-    # κ̂ = Q̂₁(1-τ) / Q̂₀(1-τ) （公式 19）
+    # κ̂ = Q̂₁(1-τ) / Q̂₀(1-τ)  (equation 19)
     if not (np.isfinite(q_t) and np.isfinite(q_c) and q_c > 0):
         return {"qte": qte, "se": np.nan, "sigma": np.nan, "phi": np.nan,
                 "q_treated": q_t, "q_control": q_c, "ci": (np.nan, np.nan)}
     kappa = q_t / q_c
-    kappa = float(np.clip(kappa, 1e-12, None))   # 避免 1/κ 下溢
+    kappa = float(np.clip(kappa, 1e-12, None))   # avoid underflow of 1/κ
 
-    # σ̂² = min{1,κ̂}² (γ̂₁^F)² â²_{n,1} + min{1,1/κ̂}² (γ̂₀^F)² â²_{n,0}  (公式 21)
+    # σ̂² = min{1,κ̂}² (γ̂₁^F)² â²_{n,1} + min{1,1/κ̂}² (γ̂₀^F)² â²_{n,0}  (equation 21)
     m1 = min(1.0, kappa)
     m0 = min(1.0, 1.0 / kappa)
     sigma2 = (m1 * gamma_t) ** 2 * a_sq_t + (m0 * gamma_c) ** 2 * a_sq_c
@@ -218,9 +225,10 @@ def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
                 "q_treated": q_t, "q_control": q_c, "ci": (np.nan, np.nan)}
     sigma = float(np.sqrt(sigma2))
 
-    # φ̂_n = √k0 / [ log(β_n/τ) · max{Q̂₁(1-τ), Q̂₀(1-τ)} ]           (公式 18)
-    # 注：公式 (18) 的 β_n 与 k0 来自同一处理组辅助水平（k0 = n·β_n），故
-    # 取 min{β_t, β_c} 作"最深的辅助水平"以保持 log(β_n/τ) > 0。
+    # φ̂_n = √k0 / [ log(β_n/τ) · max{Q̂₁(1-τ), Q̂₀(1-τ)} ]           (equation 18)
+    # Note: the β_n and k0 in equation (18) come from the same treated-group auxiliary level
+    # (k0 = n·β_n), so min{β_t, β_c} is taken as the "deepest auxiliary level" to keep
+    # log(β_n/τ) > 0.
     beta_phi = float(min(beta_t, beta_c))
     if not (beta_phi > tau_target > 0) or beta_phi <= 0:
         return {"qte": qte, "se": np.nan, "sigma": np.nan, "phi": np.nan,
@@ -241,13 +249,13 @@ def fraga_diff_asymp_ci(data, alpha_n, beta_fb, tau_target, k0res, n):
 
 
 def bootstrap_prep(data0, n, B, rng, cfg):
-    """对 μ=0 原始样本做 B 次有放回重采样，预计算每组 bootstrap 单位。
+    """Do B resamples with replacement of the μ=0 original sample, precomputing each bootstrap unit.
 
-    返回 (boot_idx, boot_D, boot_pi, boot_k0)：
-      boot_idx : list of (n,) 重采样索引
-      boot_D   : list of (n,) 重采样后的处理指示
-      boot_pi  : list of (n,) 重采样后重新筛估计的倾向得分
-      boot_k0  : list of estimate_k0_by_group 结果（bootstrap 样本上自适应 k0）
+    Returns (boot_idx, boot_D, boot_pi, boot_k0):
+      boot_idx : list of (n,) resample indices
+      boot_D   : list of (n,) resampled treatment indicators
+      boot_pi  : list of (n,) propensity scores re-estimated by sieves on the resample
+      boot_k0  : list of estimate_k0_by_group results (adaptive k0 on the bootstrap sample)
     """
     import warnings
 
@@ -263,7 +271,7 @@ def bootstrap_prep(data0, n, B, rng, cfg):
             try:
                 k0 = estimate_k0_by_group(cfg, bs, n)
             except Exception:
-                k0 = None  # 失败：后续按兜底 β_n 处理
+                k0 = None  # failure: treated with the fallback β_n later
         boot_idx.append(idx)
         boot_D.append(bs["D"])
         boot_pi.append(bs["pi_estimate"])
@@ -273,14 +281,14 @@ def bootstrap_prep(data0, n, B, rng, cfg):
 
 def run_experiment(cfg, model, n, replications, bootstrap_B,
                    conf_level, base_seed):
-    """对单个 (模型, 样本量) 跑 R 次重复、B 次 bootstrap，计算覆盖率。
+    """Run R repetitions and B bootstrap resamples for a single (model, sample size) to compute coverage.
 
-    location shift 固定为 u = 0。
+    The location shift is fixed at u = 0.
 
-    返回 (coverage_by, truth_by, tau_vals)。
-    coverage_by: {tau_name: {method: (覆盖率, Wilson 下界, 上界)}}
-    truth_by   : {tau_name: 真实 QTE}
-    tau_vals   : {tau_name: 上尾概率 tau}
+    Returns (coverage_by, truth_by, tau_vals).
+    coverage_by: {tau_name: {method: (coverage, Wilson lower bound, upper bound)}}
+    truth_by   : {tau_name: true QTE}
+    tau_vals   : {tau_name: upper-tail probability tau}
     """
     import warnings
     from scipy import stats
@@ -296,34 +304,36 @@ def run_experiment(cfg, model, n, replications, bootstrap_B,
                 for name in tau_names}
 
     z = stats.norm.ppf(1.0 - (1.0 - conf_level) / 2.0)
-    # 记录每方法 R 次重复的覆盖指示（非有限估计记为 nan）
+    # record the coverage indicator over R repetitions for each method (non-finite estimates are nan)
     cov_hits = {name: {m: [] for m in METHODS} for name in tau_names}
 
     for rep in range(replications):
         seed = base_seed + rep
-        data0 = generate_dataset(cfg, model, n, seed)   # μ 缺省 = 0（u 固定为 0）
+        data0 = generate_dataset(cfg, model, n, seed)   # μ defaults to 0 (u is fixed at 0)
         data0, _h_n, _info = estimate_propensity_sieve(data0)
-        rng = np.random.default_rng(seed + 987654321)   # bootstrap 子种子
-        # 原始样本的分组 k0（Fraga；μ=0 数据）
+        rng = np.random.default_rng(seed + 987654321)   # bootstrap sub-seed
+        # group k0 of the original sample (Fraga; μ=0 data)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:
                 k0_orig = estimate_k0_by_group(cfg, data0, n)
             except Exception:
                 k0_orig = None
-        # 预计算 bootstrap 单位（μ=0 样本重采样 + 重估倾向得分 + 分组 k0）
+        # precompute the bootstrap units (μ=0 sample resampling + re-estimating the propensity
+        # score + group k0)
         boot_idx, boot_D, boot_pi, boot_k0 = bootstrap_prep(
             data0, n, bootstrap_B, rng, cfg)
         Y = data0["Y"]
 
-        # 原始样本点估计（每个 tau 水平四种方法）
+        # point estimates on the original sample (four methods for each tau level)
         point = {name: estimate_qte_by_method(
             data0, levels[name], alpha_n, beta_fb, beta_deuber_diff, k0_orig)
             for name in tau_names}
 
-        # bootstrap 分布：同一组重采样索引/倾向得分/k0 应用到当前样本的 Y
-        # （每个 tau 水平分别记录 bootstrap 估计，se 按 tau 独立计算；
-        #  Fraga_diff_asymp 不依赖 bootstrap，跳过）
+        # bootstrap distribution: the same set of resample indices / propensity score / k0 is
+        # applied to the current sample's Y (the bootstrap estimates are recorded separately per
+        # tau level, and se is computed independently per tau; Fraga_diff_asymp does not depend
+        # on bootstrap and is skipped)
         boot_methods = [m for m in METHODS if m != "Fraga_diff_asymp"]
         boot_ests = {name: {m: [] for m in boot_methods} for name in tau_names}
         for idx, D_b, pi_b, k0_b in zip(boot_idx, boot_D, boot_pi, boot_k0):
@@ -338,11 +348,12 @@ def run_experiment(cfg, model, n, replications, bootstrap_B,
                     boot_ests[name][m].append(b_est[m])
 
         for name in tau_names:
-            # 点估计对每个 tau 水平是独立的标量
+            # the point estimate is an independent scalar for each tau level
             est_m = point[name]
             for m in METHODS:
                 if m == "Fraga_diff_asymp":
-                    # 解析 CI：不依赖 bootstrap，按公式 (22) 直接由 σ̂/φ̂ 构造
+                    # analytic CI: does not depend on bootstrap; constructed directly from σ̂/φ̂
+                    # by equation (22)
                     k0_asym = k0_orig if k0_orig is not None else {
                         "beta_treated": beta_fb, "beta_control": beta_fb}
                     asymp = fraga_diff_asymp_ci(
@@ -370,8 +381,8 @@ def run_experiment(cfg, model, n, replications, bootstrap_B,
                 cov_hits[name][m].append(
                     1.0 if (lo <= truth_by[name] <= hi) else 0.0)
 
-    # 覆盖率点估计 + 覆盖率估计本身的 Wilson 置信区间（估计不确定性）
-    # （binomtest 的 wilson 方法即 Wilson score interval）
+    # coverage point estimate + the Wilson confidence interval for the coverage estimate itself
+    # (estimation uncertainty); binomtest's wilson method is the Wilson score interval
     wilson_conf = 0.95
     coverage_by = {}
     for name in tau_names:
@@ -392,10 +403,11 @@ def run_experiment(cfg, model, n, replications, bootstrap_B,
 
 def plot_coverage(coverage_by, tau_names, tau_formulas,
                   model, sample_sizes, conf_level, out_dir):
-    """一个模型一张图（覆盖率）：location shift 固定 u = 0，行 = 样本量 n、
-    列 = tau_n 水平，子图横轴不标方法名、纵轴 = 覆盖率（[0,1]），每种方法一个
-    点估计 + Wilson 置信区间误差棒（方法名由图例说明），并画名义置信水平
-    参考线。行标签 n 放在最右列 y 轴右侧。"""
+    """One figure per model (coverage): the location shift is fixed at u = 0, rows = sample size n,
+    columns = tau_n levels, the subplot x-axis does not label the method names, the y-axis =
+    coverage ([0,1]), one point estimate + Wilson CI error bar per method (the method names are
+    explained by the legend), plus the nominal confidence level reference line. The row label n
+    is placed to the right of the y-axis of the rightmost column."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -420,7 +432,7 @@ def plot_coverage(coverage_by, tau_names, tau_formulas,
             ax.axhline(conf_level, color="black", linestyle="--", linewidth=1.2,
                        alpha=0.7)
             ax.set_ylim(0.0, 1.0)
-            # 横坐标不做方法标识（方法名由图例说明）
+            # the x-axis does not identify the methods (the method names are explained by the legend)
             ax.set_xticks(x)
             ax.set_xticklabels([])
             if r == 0:
@@ -430,14 +442,15 @@ def plot_coverage(coverage_by, tau_names, tau_formulas,
                 ax.set_ylabel(f"n = {n}", fontsize=11)
                 ax.yaxis.set_label_position("right")
     fig.supylabel("coverage", fontsize=13)
-    # 图例显示各方法与参考线/误差棒说明
+    # the legend shows the methods and the reference line / error bar descriptions
     handles = [plt.Line2D([0], [0], marker="o", ls="", color=COLORS[m],
                           markersize=5, label=LABELS[m]) for m in METHODS]
     handles.append(plt.Line2D([0], [0], color="black", linestyle="--",
                               label=f"nominal level {conf_level:.0%}"))
     handles.append(plt.Line2D([0], [0], color="gray", marker="_", ls="",
                               label="error bar: 95% Wilson CI"))
-    # 图例放图片最上方；模型标识放在图例下方、τ_n 标题上方
+    # the legend is at the very top of the figure; the model label is placed below the legend
+    # and above the τ_n titles
     fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.99),
                ncol=5, fontsize=8, frameon=False, alignment="center")
     fig.text(0.5, 0.87, model, ha="center", va="center", fontsize=13)
@@ -479,13 +492,13 @@ if __name__ == "__main__":
     z = stats.norm.ppf(1.0 - (1.0 - conf_level) / 2.0)
 
     print("=" * 72)
-    print("QTE 置信区间覆盖率 Monte Carlo 实验")
-    print("  （点估计用原始样本；标准误用 bootstrap，正态近似 CI）")
-    print(f"  模型: {models}")
-    print(f"  样本量列表: {sample_sizes}")
-    print("  location shift u = 0（固定）")
-    print(f"  Monte Carlo 重复 R = {replications}，bootstrap 重采样 B = {bootstrap_B}")
-    print(f"  名义置信水平 = {conf_level}（正态临界值 z = {z:.4f}）")
+    print("QTE confidence interval coverage Monte Carlo experiment")
+    print("  (point estimate from the original sample; standard error from bootstrap, normal-approximation CI)")
+    print(f"  models: {models}")
+    print(f"  sample sizes: {sample_sizes}")
+    print("  location shift u = 0 (fixed)")
+    print(f"  Monte Carlo repetitions R = {replications}, bootstrap resamples B = {bootstrap_B}")
+    print(f"  nominal confidence level = {conf_level} (normal critical value z = {z:.4f})")
     print("=" * 72)
 
     tasks = [(model, n) for model in models for n in sample_sizes]
@@ -493,7 +506,7 @@ if __name__ == "__main__":
         max_workers = min(len(tasks), workers)
     else:
         max_workers = min(len(tasks), os.cpu_count() or 1)
-    print(f"  任务数: {len(tasks)}，并行进程数: {max_workers}")
+    print(f"  tasks: {len(tasks)}, parallel processes: {max_workers}")
 
     all_cov = {model: {n: None for n in sample_sizes} for model in models}
     all_truth = {model: {n: None for n in sample_sizes} for model in models}
@@ -512,7 +525,7 @@ if __name__ == "__main__":
                 try:
                     all_cov[model][n], all_truth[model][n], _ = fut.result()
                 except Exception as e:
-                    print(f"[模型 {model}, n={n}] 失败: {e}")
+                    print(f"[model {model}, n={n}] failed: {e}")
                     raise
                 pbar.set_postfix_str(f"{model} n={n}")
                 pbar.update(1)
@@ -523,4 +536,4 @@ if __name__ == "__main__":
         plot_coverage(cov_by_n, tau_names, tau_formulas,
                       model, sample_sizes, conf_level, out_dir)
 
-    print("\n实验结束。")
+    print("\nExperiment finished.")

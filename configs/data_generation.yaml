@@ -1,14 +1,13 @@
 # =================================================================
-# 数据生成配置：QTE 置信区间模拟实验
-# 来源：基于 Zhang (2018) 的 DGP
-# 注：inference（置信水平、Bootstrap、Monte Carlo）参数暂未写入
+# Data generation config: QTE confidence interval simulation experiment.
+# Source: DGP based on Zhang (2018).
 # =================================================================
 
 experiment:
   random_seed: 20260101
 
 # -----------------------------------------------------------------
-# 1. 数据生成 (DGP)
+# 1. Data generation (DGP)
 # -----------------------------------------------------------------
 data_generation:
   covariate:
@@ -23,7 +22,7 @@ data_generation:
     high: 1.0
 
 # -----------------------------------------------------------------
-# 2. 处理分配 (Treatment Assignment)
+# 2. Treatment assignment
 # -----------------------------------------------------------------
 treatment:
   name: D
@@ -36,12 +35,12 @@ treatment:
       quadratic: 0.5
 
 # -----------------------------------------------------------------
-# 3. 结果模型 (Outcome Models)
+# 3. Outcome models
 # -----------------------------------------------------------------
 outcome_models:
 
   H1:
-    description: "线性模型 + Student-t 噪声（重尾）"
+    description: "Linear model + Student-t noise (heavy-tailed)"
     Y1:
       formula: "5 * S * (1 + X)"
     Y0:
@@ -50,12 +49,12 @@ outcome_models:
       variable: S
       distribution: student_t
       df: 3
-    evi:                 # 理论极值指数（用于后续验证估计量）
+    evi:                 # theoretical extreme value index (used to validate the estimators)
       gamma_1: 0.3333    # 1/3
       gamma_0: 0.3333    # 1/3
 
   H2:
-    description: "指数模型 + Frechet 噪声（重尾）"
+    description: "Exponential model + Frechet noise (heavy-tailed)"
     Y1:
       formula: "C2 * exp(X)"
       noise:
@@ -73,13 +72,14 @@ outcome_models:
         loc: 0.0
         scale: 1.0
     evi:
-      gamma_1: 0.5       # 1/2  (对应 shape=2)
-      gamma_0: 0.3333    # 1/3  (对应 shape=3)
+      gamma_1: 0.5       # 1/2  (shape=2)
+      gamma_0: 0.3333    # 1/3  (shape=3)
 
   H3:
-    description: "Pareto 模型（重尾，条件形状参数依赖协变量）"
-    # 注：shape 为条件参数（随 X 变化）；边际 EVI 由最重尾成分决定，
-    #     = 1/min a(x) = 1/1.75 = 4/7（X 支撑有界[0,1]，最小值在 X=0 处取得），故 evi 固定。
+    description: "Pareto model (heavy-tailed, conditional shape parameter depends on covariates)"
+    # Note: shape is a conditional parameter (varies with X); the marginal EVI is
+    #       determined by the heaviest-tailed component = 1/min a(x) = 1/1.75 = 4/7
+    #       (X has bounded support [0,1], minimum attained at X=0), so evi is fixed.
     Y1:
       distribution: pareto
       shape_formula: "1.75 + X"
@@ -93,13 +93,13 @@ outcome_models:
       gamma_0: 0.5714    # 4/7
 
 # -----------------------------------------------------------------
-# 4. 实验设计 (Experimental Design)
+# 4. Experimental design
 # -----------------------------------------------------------------
 design:
-  # 样本量网格
+  # sample size grid
   sample_sizes: [1000, 5000]
 
-  # 极端分位数水平 τ_n（n 的函数，运行时代入具体 n）
+  # extreme quantile levels τ_n (functions of n, evaluated at runtime)
   quantile_levels:
     - name: "tau_n_1"
       formula: "5 / n"
@@ -107,39 +107,45 @@ design:
       formula: "1 / n"
     - name: "tau_n_3"
       formula: "5 / (n * log(n))"
-    # 中间分位数水平 α_n = k/n，其中 k = n^{0.65}（等价写法 α_n = n^{-0.35}）
+    # intermediate quantile level α_n = k/n with k = n^{0.65} (equivalently α_n = n^{-0.35})
     - name: "alpha_n"
       formula: "n ** 0.65 / n"
 
-  # k0 自适应估计超参数（k0 = k^m，取代手动指定 k0）：
-  #   k0_init_formula: 初始取定的 k0* 公式（默认 2·k^{2/3}，k = n^{0.65} 来自 alpha_n）
-  #   k0_sigma:        m = m* - σ 中的 σ
-  #   k0_m_lower:      m 的下界兜底值（m* - σ < 该值时取该值）
+  # hyperparameters for the adaptive k0 estimator (k0 = k^m, replacing the manually specified k0):
+  #   k0_init_formula: initial k0* formula (default 2·k^{2/3}, k = n^{0.65} from alpha_n)
+  #   k0_sigma:        the σ in m = m* - σ
+  #   k0_m_lower:      lower bound for m (used when m* - σ falls below it)
   k0_init_formula: "2*(n ** 0.65) ** (2 / 3)"
   k0_sigma: 0.05
   k0_m_lower: 0.1
-  # Deuber_diff 的固定 k0 公式（k0 = k^(2/3)，k = n^0.65 来自 alpha_n）：
-  # 统一取 k0_deuber_diff = (n*alpha_n)^(2/3)，不随 Fraga 分组自适应估计；
-  # β_n^deuber_diff = k0_deuber_diff / n（运行时代入具体 n）
+  # fixed k0 formula for Deuber_diff (k0 = k^(2/3), k = n^0.65 from alpha_n):
+  # k0_deuber_diff = (n*alpha_n)^(2/3) is fixed and does not follow the adaptive
+  # group-specific Fraga estimate; β_n^deuber_diff = k0_deuber_diff / n (evaluated
+  # at runtime for the specific n).
   k0_deuber_diff_formula: "2*(n ** 0.65) ** (2 / 3)"
 
-  # Monte Carlo 重复次数：每个场景独立重复生成样本并估计
+  # number of Monte Carlo replications: each scenario regenerates samples and
+  # re-estimates independently
   replications: 1000
 
-  # 共享位置偏移 μ 列表：模型层外加到潜在结果 Y(j) = μ + 原分布（H1/H2/H3 一致）。
-  # 真实 QTE = q_{Y1+μ}(τ) - q_{Y0+μ}(τ) 平移不变，不随 μ 变化；每个 μ 得到一个
-  # MSE，用于考察估计量对位置变化的敏感性。取值需按各模型分布尺度设定。
-  # （默认 μ=0 由代码缺省处理，实验时 shifts 覆盖）
+  # shared location shift μ list: added at the model level to the potential outcomes
+  # Y(j) = μ + original distribution (identical across H1/H2/H3). The true QTE
+  # = q_{Y1+μ}(τ) - q_{Y0+μ}(τ) is translation-invariant and does not depend on μ;
+  # each μ yields one MSE used to examine the estimator's sensitivity to the location
+  # change. Values should be set per the scale of each model's distribution.
+  # (μ=0 is handled by default in code; shifts overrides it in the experiment)
   shifts: [0,10,20,30]
 
-  # 并行 worker 进程数（ProcessPoolExecutor 的 max_workers）。
+  # number of parallel worker processes (max_workers for ProcessPoolExecutor).
   num_workers: 10
 
 # -----------------------------------------------------------------
-# 5. 推断（置信区间覆盖率实验）设置
+# 5. Inference (confidence interval coverage experiment) settings
 # -----------------------------------------------------------------
 inference:
-  # 名义置信水平 1-α：CI 覆盖率实验的目标值（如 0.9 → z_{0.95} 正态临界值）
+  # nominal confidence level 1-α: target value for the CI coverage experiment
+  # (e.g. 0.9 → z_{0.95} normal critical value)
   confidence_level: 0.9
-  # Bootstrap 重采样次数 B：估计统计量标准误（每个 Monte Carlo 重复内）
-  bootstrap_replications: 200
+  # number of bootstrap resamples B: used to estimate the standard error of the
+  # statistic (within each Monte Carlo replication)
+  bootstrap_replications: 1000

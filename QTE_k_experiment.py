@@ -1,34 +1,36 @@
 # -*- coding: utf-8 -*-
-"""QTE 估计量的 k 敏感性分析：不同 k 下的均值与 MSE 折线图。
+"""QTE estimator k-sensitivity analysis: mean and MSE line plots across k.
 
-仿照 Hill EVI 的 k 敏感性模拟图：固定 (模型, 样本量, 目标水平 τ)，
-改变 Hill 系列估计使用的 top-k 观测数（锚点水平 α_n = k/n），
-重复 R 次估计 QTE，绘制各方法 QTE 估计的均值（应接近真实 QTE）
-与 MSE（相对真实 QTE）随 k 的变化折线图。
+Modeled on the Hill EVI k-sensitivity plots: fix (model, sample size, target level τ),
+vary the number of top-k observations used by the Hill-family estimators (anchor level
+α_n = k/n), repeat R times to estimate the QTE, and plot the mean of the QTE estimates
+(which should be close to the true QTE) and the MSE (relative to the true QTE) as
+functions of k.
 
-方法：
-  - Deuber      : Hill EVI + Weissman 外推（锚点 α_n = k/n）
-  - Deuber_diff : Hill EVI + 差分外推（锚点 α_n = k/n，β_n = k^(2/3)/n 统一）
-  - Fraga_alpha : Fraga EVI + Weissman 外推（锚点 α_n = k/n，k0 随 k 分组自适应）
-  - Fraga_diff  : Fraga EVI + 差分外推（k0 随 k 分组自适应）
+Methods:
+  - Deuber      : Hill EVI + Weissman extrapolation (anchor α_n = k/n)
+  - Deuber_diff : Hill EVI + difference extrapolation (anchor α_n = k/n, β_n = k^(2/3)/n uniform)
+  - Fraga_alpha : Fraga EVI + Weissman extrapolation (anchor α_n = k/n, k0 adapts with k per group)
+  - Fraga_diff  : Fraga EVI + difference extrapolation (k0 adapts with k per group)
 
-对每个 (模型, 样本量) 一张图：行 = (均值, MSE)，列 = tau_n 水平，
-横轴 = k（top observations），每方法一条折线，真实 QTE 参考线。
+One figure per model per metric (mean and MSE drawn separately): rows = sample size n,
+columns = tau_n levels, x-axis = k (top observations), one line per method, with the true
+QTE reference line.
 
-CLI 参数：
-  --replications R        重复次数（默认读配置）
-  --sample-sizes n1 n2..  样本量列表
-  --k-grid k1 k2 ..       指定 k 序列（默认配置 design.k_grid 或对数网格）
-  --workers W             并行进程数
+CLI args:
+  --replications R        number of repetitions (default: from config)
+  --sample-sizes n1 n2..  list of sample sizes
+  --k-grid k1 k2 ..       explicit k sequence (default: config design.k_grid or a log grid)
+  --workers W             number of parallel processes
 
-运行:
+Run:
   D:\\Miniconda\\python.exe QTE_k_experiment.py
 """
 import os
 import sys
 from pathlib import Path
 
-# 限制 worker 内 BLAS/OpenMP 线程数为 1（须在 import numpy 前）
+# Limit the BLAS/OpenMP threads inside each worker to 1 (must be set before importing numpy)
 os.environ.update({
     "OMP_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
@@ -68,7 +70,7 @@ LABELS = {
 
 
 def default_k_grid(cfg, n):
-    """默认 k 网格：[50, n/2] 等距取 10 个点（与 EVI_k_experiment 一致）。"""
+    """Default k grid: 10 equally spaced points in [50, n/2]."""
     if cfg["design"].get("k_grid"):
         return [float(k) for k in cfg["design"]["k_grid"]]
     k_min = 50
@@ -77,15 +79,15 @@ def default_k_grid(cfg, n):
 
 
 def estimate_qte_by_method(cfg, data, tau, k, n, truth):
-    """给定 k（top observations），估计各方法 QTE（tau 为目标上尾概率）。
+    """Given k (top observations), estimate the QTE of each method (tau is the target upper-tail probability).
 
-    cfg : 实验配置（k0 自适应估计用）
-    data: 含 Y, D, pi_estimate 的数据 dict
-    返回 {method: qte}（估计失败/超尾越界时可为 nan）。
+    cfg : experiment config (used for the k0 adaptive estimation)
+    data: data dict containing Y, D, pi_estimate
+    Returns {method: qte} (may be nan when the estimate fails or goes out of the tail range).
     """
-    alpha_n = float(k) / n                 # 锚点水平
-    beta_dd = float(k) ** (2.0 / 3.0) / n  # Deuber_diff 统一辅助水平
-    beta_fb = fallback_beta(cfg, n)        # Fraga 兜底辅助水平
+    alpha_n = float(k) / n                 # anchor level
+    beta_dd = float(k) ** (2.0 / 3.0) / n  # uniform auxiliary level for Deuber_diff
+    beta_fb = fallback_beta(cfg, n)        # fallback auxiliary level for Fraga
     out = {}
     try:
         out["Deuber"] = estimate_qte_extrapolation(data, alpha_n, tau)["qte_ext"]
@@ -96,7 +98,7 @@ def estimate_qte_by_method(cfg, data, tau, k, n, truth):
     except Exception:
         out["Deuber_diff"] = np.nan
     try:
-        # Fraga 的 k0 随 k 变化：分组自适应估计 β_n（k0 = k^m，k = n·α_n）
+        # Fraga's k0 varies with k: group-adaptive β_n (k0 = k^m, k = n·α_n)
         k0res = estimate_k0_by_group(cfg, data, n, k=k)
         beta_t = k0res["beta_treated"]
         beta_c = k0res["beta_control"]
@@ -118,7 +120,8 @@ def estimate_qte_by_method(cfg, data, tau, k, n, truth):
 
 
 def run_experiment(cfg, model, n, k_grid, replications, base_seed):
-    """对单个 (模型, 样本量) 跑 R 次重复、全部 k，返回 {tau_name: {k: {method: ndarray}}}。"""
+    """Run R repetitions over all k for a single (model, sample size), returning
+    {tau_name: {k: {method: ndarray}}}."""
     levels = dict(tau_levels(cfg, n))
     tau_names = [name for name in levels if name.startswith("tau_n")]
     truth = {name: real_qte(cfg, model, 1.0 - levels[name])["qte"]
@@ -142,7 +145,7 @@ def run_experiment(cfg, model, n, k_grid, replications, base_seed):
 
 
 def summarize(results, truth):
-    """从重复数组汇总均值与 MSE：返回 {tau_name: {k: {method: (mean, mse)}}}。"""
+    """Aggregate the repetition arrays into mean and MSE: returns {tau_name: {k: {method: (mean, mse)}}}."""
     summ = {}
     for name, by_k in results.items():
         summ[name] = {}
@@ -158,11 +161,13 @@ def summarize(results, truth):
 
 def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
                   k_grid_by_n, out_dir):
-    """一个模型两张图（均值、MSE 分开）：行 = 样本量 n、列 = tau_n 水平，
-    子图横轴 = k（top observations），每方法一条折线。MSE 图与 H1 的均值图
-    用对数刻度（主刻度 10 倍、无小刻度），H2/H3 的均值图用线性刻度。
-    横纵坐标说明放在图的最外层；行标签 n 在最右列 y 轴右侧；
-    τ_n 标识只在第一行顶部显示。"""
+    """Two figures per model (mean and MSE drawn separately): rows = sample size n,
+    columns = tau_n levels, subplot x-axis = k (top observations), one line per method.
+    The MSE figure and the mean figure of H1 use log scale (major ticks at powers of 10,
+    no minor ticks); the mean figures of H2/H3 use linear scale.
+    The axis captions are placed at the outermost edges; the row label n is to the right
+    of the y-axis of the rightmost column; the τ_n label is shown only at the top of the
+    first row."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -185,8 +190,9 @@ def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
                             for k in ks]
                     ax.plot(ks, vals, marker="o", markersize=2.5, linewidth=1.2,
                             color=COLORS[m], label=LABELS[m])
-                # H1 均值图与全部 MSE 图用对数刻度（主刻度固定为 10 的整数
-                # 次幂、10 倍间距，关闭小刻度）；H2/H3 均值图用线性刻度
+                # H1's mean figure and all MSE figures use log scale (major ticks fixed to
+                # integer powers of 10 with 10x spacing, minor ticks disabled); H2/H3's mean
+                # figures use linear scale
                 if metric == "mse" or (metric == "mean" and model == "H1"):
                     ax.set_yscale("log")
                     ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0,)))
@@ -196,16 +202,18 @@ def plot_k_curves(summ, truth, tau_names, tau_formulas, model, sample_sizes,
                                linewidth=1.2, alpha=0.7, label="true QTE")
                 if r == 0:
                     ax.set_title(rf"$\tau_n = {tau_formulas[name]}$")
-                # 横轴固定 5 个等距刻度：0, max_k/4, ..., max_k（如 n=1000 显示 0,200,400,600,800,1000）
+                # x-axis fixed to 5 equally spaced ticks: 0, max_k/4, ..., max_k
+                # (e.g. n=1000 shows 0,200,400,600,800,1000)
                 ticks = np.linspace(0, ks.max(), 6)
                 ax.set_xticks(ticks)
                 ax.set_xticklabels([int(t) for t in ticks], fontsize=7)
                 ax.grid(alpha=0.3, which="major", axis="y")
-                # 行标签（样本量）：放在最右列子图的 y 轴右侧
+                # row label (sample size): placed to the right of the y-axis of the
+                # rightmost-column subplot
                 if c == n_tau - 1:
                     ax.set_ylabel(f"n = {n}", fontsize=11)
                     ax.yaxis.set_label_position("right")
-        # 最外层横纵坐标说明
+        # outermost axis captions
         fig.supxlabel("k-number of top observations", fontsize=13, y=0.04)
         fig.supylabel(ylabel, fontsize=13)
         handles = [plt.Line2D([0], [0], color=COLORS[m], label=LABELS[m])
@@ -241,18 +249,18 @@ if __name__ == "__main__":
     workers = args.workers if args.workers is not None else int(cfg["design"].get("num_workers", 0))
     models = list(cfg["outcome_models"])
 
-    # 每个 (模型, 样本量) 可能有不同的 k 网格
+    # each (model, sample size) may have a different k grid
     k_grid_by_n = {}
     for n in sample_sizes:
         k_grid_by_n[n] = args.k_grid if args.k_grid else default_k_grid(cfg, n)
 
     print("=" * 72)
-    print("QTE 估计量 k 敏感性分析（k = top observations 数量）")
-    print(f"  模型: {models}")
-    print(f"  样本量列表: {sample_sizes}")
-    print(f"  重复次数 R = {replications}")
+    print("QTE estimator k-sensitivity analysis (k = number of top observations)")
+    print(f"  models: {models}")
+    print(f"  sample sizes: {sample_sizes}")
+    print(f"  repetitions R = {replications}")
     for n in sample_sizes:
-        print(f"  n={n}: k 网格 = {[int(k) for k in k_grid_by_n[n]]}")
+        print(f"  n={n}: k grid = {[int(k) for k in k_grid_by_n[n]]}")
     print("=" * 72)
 
     tasks = [(model, n) for model in models for n in sample_sizes]
@@ -260,7 +268,7 @@ if __name__ == "__main__":
         max_workers = min(len(tasks), workers)
     else:
         max_workers = min(len(tasks), os.cpu_count() or 1)
-    print(f"  任务数: {len(tasks)}，并行进程数: {max_workers}")
+    print(f"  tasks: {len(tasks)}, parallel processes: {max_workers}")
 
     all_results = {model: {n: None for n in sample_sizes} for model in models}
     all_truth = {model: {n: None for n in sample_sizes} for model in models}
@@ -279,7 +287,7 @@ if __name__ == "__main__":
                 try:
                     all_results[model][n], all_truth[model][n] = fut.result()
                 except Exception as e:
-                    print(f"[模型 {model}, n={n}] 失败: {e}")
+                    print(f"[model {model}, n={n}] failed: {e}")
                     raise
                 pbar.set_postfix_str(f"{model} n={n}")
                 pbar.update(1)
@@ -297,4 +305,4 @@ if __name__ == "__main__":
         plot_k_curves(summ_by_n, truth_by_n, tau_names, tau_formulas,
                       model, sample_sizes, k_grid_by_n, out_dir)
 
-    print("\n实验结束。")
+    print("\nExperiment finished.")

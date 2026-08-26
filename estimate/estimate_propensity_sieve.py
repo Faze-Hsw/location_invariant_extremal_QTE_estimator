@@ -24,9 +24,13 @@ def sieve_basis(X, h_n):
     return np.vander(X, N=h_n, increasing=True)
 
 
-def default_sieve_dim(n, r=1):
-    """默认筛基维度 h_n = max(2, round(n^{1/(2r+1)})) (Hirano, Imbens, Ridder 2003)。"""
-    return max(2, int(round(n ** (1 / (2 * r + 1)))))
+def default_sieve_dim(n):
+    """默认筛基维度 h_n = ⌊2·n^{1/11}⌋（用户指定取法）。
+
+    指数 1/11 使基维度随样本量增长非常缓慢；对常见样本量取值如下：
+    n=1000 → ⌊2·1000^{1/11}⌋ = ⌊3.73⌋ = 3；n=5000 → ⌊2·5000^{1/11}⌋ = ⌊4.66⌋ = 4。
+    """
+    return int(np.floor(2.0 * n ** (1.0 / 11.0)))
 
 
 def _newton_logistic(H, D, max_iter=200, tol=1e-8):
@@ -137,7 +141,7 @@ if __name__ == "__main__":
           f"D=0: {int((data['D']==0).sum())}")
 
     data, h_n, info = estimate_propensity_sieve(data)
-    print(f"  筛基维度 h_n = {h_n}  (默认 round(n^(1/3)) = {default_sieve_dim(first_n)})")
+    print(f"  筛基维度 h_n = {h_n}  (默认 floor(2*n^(1/11)) = {default_sieve_dim(first_n)})")
     print(f"  Newton 优化: n_iter={info['n_iter']}, neg log L = {info['neg_log_lik']:.3f}")
     print(f"  截距 a0 = {info['intercept']:.4f}; "
           f"前 3 个筛基系数 = {np.array2string(info['theta_orig'][1:4], precision=4)}")

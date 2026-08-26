@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Causal Hill 极值指数（EVI）估计量。
+"""Causal Hill extreme value index (EVI) estimator.
 
-基于论文公式 (7)：
+Based on equation (7) in the paper:
 
     γ̂_1^H := (1/(n·α_n)) Σ_i [log(Y_i) - log(q̂_1(1-α_n))]
              · [D_i / π̂(X_i)] · 1{Y_i > q̂_1(1-α_n)}
@@ -9,10 +9,10 @@
     γ̂_0^H := (1/(n·α_n)) Σ_i [log(Y_i) - log(q̂_0(1-α_n))]
              · [(1-D_i) / (1-π̂(X_i))] · 1{Y_i > q̂_0(1-α_n)}
 
-α_n 为中间分位数水平（配置 design.alpha_n，α_n = n^{0.65}/n）。
+α_n is the intermediate quantile level (config design.alpha_n, α_n = n^{0.65}/n).
 
-输入:  含 Y, D, pi_estimate 字段的 dict（一维数组）
-输出:  处理组与对照组的 Hill EVI 估计 γ̂_1, γ̂_0
+Input:  dict with fields Y, D, pi_estimate (1-D arrays)
+Output: Hill EVI estimates γ̂_1, γ̂_0 for the treated and control groups
 """
 from pathlib import Path
 import sys
@@ -21,7 +21,7 @@ import numpy as np
 
 
 def _weighted_quantile(Y, weights, tau):
-    """加权经验分位数（与 estimate_quantile_empirical 保持一致）。"""
+    """Weighted empirical quantile (consistent with estimate_quantile_empirical)."""
     Y = np.asarray(Y).ravel()
     weights = np.asarray(weights, dtype=float).ravel()
     if Y.size == 0:
@@ -41,12 +41,12 @@ def _weighted_quantile(Y, weights, tau):
 
 
 def estimate_evi_causal_hill(data, alpha_n):
-    """估计处理组与对照组的 Causal Hill EVI。
+    """Estimate the Causal Hill EVI for the treated and control groups.
 
-    data   : dict，含 Y, D, pi_estimate
-    alpha_n: 中间分位数水平 α_n（上尾概率，配置 design.alpha_n）
+    data   : dict containing Y, D, pi_estimate
+    alpha_n: intermediate quantile level α_n (upper-tail probability, config design.alpha_n)
 
-    返回 dict {alpha_n, q_treated, q_control, gamma_treated, gamma_control}。
+    Returns dict {alpha_n, q_treated, q_control, gamma_treated, gamma_control}.
     """
     Y = np.asarray(data["Y"]).ravel()
     D = np.asarray(data["D"]).ravel()
@@ -58,12 +58,12 @@ def estimate_evi_causal_hill(data, alpha_n):
 
     tau = 1.0 - alpha_n
 
-    # 处理组阈值 q̂_1(1-τ_n)
+    # treated-group threshold q̂_1(1-τ_n)
     mask_t = (D == 1)
     w_t = 1.0 / pi_c[mask_t]
     q1 = _weighted_quantile(Y[mask_t], w_t, tau)
 
-    # 对照组阈值 q̂_0(1-τ_n)
+    # control-group threshold q̂_0(1-τ_n)
     mask_c = (D == 0)
     w_c = 1.0 / (1.0 - pi_c[mask_c])
     q0 = _weighted_quantile(Y[mask_c], w_c, tau)
@@ -71,15 +71,15 @@ def estimate_evi_causal_hill(data, alpha_n):
     gamma_treated = np.nan
     gamma_control = np.nan
 
-    # 处理组 Hill
+    # treated-group Hill
     if q1 > 0 and not np.isnan(q1):
         indicator1 = (Y > q1) & mask_t
-        # 上尾观测必须为正才能取 log；若 q1>0 则这些 Y_i>q1>0
+        # upper-tail observations must be positive to take log; if q1>0 then these Y_i>q1>0
         log_term1 = np.log(Y[indicator1]) - np.log(q1)
         weights1 = D[indicator1] / pi_c[indicator1]
         gamma_treated = float(np.sum(weights1 * log_term1) / (n * alpha_n))
 
-    # 对照组 Hill
+    # control-group Hill
     if q0 > 0 and not np.isnan(q0):
         indicator0 = (Y > q0) & (~mask_t)
         log_term0 = np.log(Y[indicator0]) - np.log(q0)
@@ -96,14 +96,14 @@ def estimate_evi_causal_hill(data, alpha_n):
 
 
 def estimate_evi_for_config(cfg, data, n):
-    """根据配置中 alpha_n 公式计算 Hill EVI。"""
+    """Compute the Hill EVI using the alpha_n formula from the config."""
     alpha_n = None
     for q in cfg["design"]["quantile_levels"]:
         if q["name"] == "alpha_n":
             alpha_n = eval(q["formula"], {"n": n, "log": np.log})
             break
     if alpha_n is None:
-        raise ValueError("配置中缺少 alpha_n 分位数水平")
+        raise ValueError("Missing alpha_n quantile level in config")
     return estimate_evi_causal_hill(data, alpha_n)
 
 
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     seed = cfg["experiment"]["random_seed"]
 
     print("=" * 72)
-    print("Causal Hill EVI 估计（公式 7，tau_n = alpha_n）")
+    print("Causal Hill EVI estimation (equation 7, tau_n = alpha_n)")
     print("=" * 72)
 
     for model in cfg["outcome_models"]:
@@ -128,11 +128,11 @@ if __name__ == "__main__":
             res = estimate_evi_for_config(cfg, data, n)
 
             theory = cfg["outcome_models"][model]["evi"]
-            print(f"\n[模型={model}, n={n}, h_n={h_n}]")
+            print(f"\n[model={model}, n={n}, h_n={h_n}]")
             print(f"  alpha_n(tau_n)={res['alpha_n']:.4e}")
             print(f"  q_hat_1(1-alpha)={res['q_treated']:12.3f}, "
                   f"q_hat_0(1-alpha)={res['q_control']:12.3f}")
             print(f"  gamma_hat_1^H = {res['gamma_treated']:8.4f}  "
-                  f"(理论 gamma_1 = {theory['gamma_1']:.4f})")
+                  f"(theoretical gamma_1 = {theory['gamma_1']:.4f})")
             print(f"  gamma_hat_0^H = {res['gamma_control']:8.4f}  "
-                  f"(理论 gamma_0 = {theory['gamma_0']:.4f})")
+                  f"(theoretical gamma_0 = {theory['gamma_0']:.4f})")

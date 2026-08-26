@@ -1,35 +1,37 @@
 # -*- coding: utf-8 -*-
-"""QTE 估计量位置敏感性 Monte Carlo 实验：mu -> 箱线图。
+"""QTE estimator location-sensitivity Monte Carlo experiment: mu -> boxplots.
 
-对比各 QTE 估计方法在不同共享位置偏移 μ 下对分位数水平 1-tau_n 处 QTE 估计的
-MSE（真实 QTE 由 QTE_real.py 给出），覆盖配置中全部 tau_n_* 水平：
+Compare the QTE estimates of the various methods at quantile level 1-tau_n under different
+shared location shifts μ (the true QTE is given by QTE_real.py), covering all tau_n_* levels
+in the config:
 
-  - Deuber      : Hill EVI + Weissman 外推（锚点 alpha_n）
-  - Deuber_diff : Hill EVI + 差分外推（双锚点 alpha_n / beta_n）
-  - Fraga_alpha : Fraga EVI + Weissman 幂外推（锚点 alpha_n）
-  - Fraga_diff  : Fraga EVI + 差分外推（双锚点 alpha_n / beta_n）
+  - Deuber      : Hill EVI + Weissman extrapolation (anchor alpha_n)
+  - Deuber_diff : Hill EVI + difference extrapolation (two anchors alpha_n / beta_n)
+  - Fraga_alpha : Fraga EVI + Weissman power extrapolation (anchor alpha_n)
+  - Fraga_diff  : Fraga EVI + difference extrapolation (two anchors alpha_n / beta_n)
 
-横坐标为共享位置偏移 μ（模型层外加 Y(j) = μ + 原分布，H1/H2/H3 一致）。
-真实 QTE = q_{Y1}(tau) - q_{Y0}(tau) 对 μ 平移不变（两端抵消），
-因此 MSE 随 μ 的变化完全反映各估计量的位置敏感性。
+The x-axis is the shared location shift μ (added at the model level as Y(j) = μ + original
+distribution, identical across H1/H2/H3). The true QTE = q_{Y1}(tau) - q_{Y0}(tau) is
+translation-invariant in μ (the two ends cancel), so the change of the MSE with μ reflects
+purely the location sensitivity of each estimator.
 
-流程：
-  1. 对每个模型 / 样本量 / μ，依配置生成不同位置分布的样本；
-  2. 各方法估计各分位数水平 1-tau_n 处的 QTE；
-  3. 重复 R 次，收集每个估计量的估计值；
-  4. 画箱线图：一个模型两张图（估计量 / 平方误差），行 = 样本量 n、
-     列 = tau_n 水平，子图内横轴 μ、每个 μ 处各方法一个箱线图。
-     估计量图纵轴 = QTE estimate（线性刻度，含真实 QTE 参考线）；
-     平方误差图纵轴 = Squared Error（对数刻度）；
-     横纵坐标说明（location shift / 指标）放在图最外层。
+Procedure:
+  1. For each model / sample size / μ, generate samples with different location distributions;
+  2. Each method estimates the QTE at each quantile level 1-tau_n;
+  3. Repeat R times and collect the estimates of each estimator;
+  4. Draw boxplots: two figures per model (estimate / squared error), rows = sample size n,
+     columns = tau_n levels, with μ on the subplot x-axis and one boxplot per method at each μ.
+     The estimate figure's y-axis = QTE estimate (log scale, with the true QTE reference line);
+     the squared-error figure's y-axis = Squared Error (log scale);
+     the axis captions (location shift / metric) are placed at the outermost edges.
 
-CLI 参数（均可选，默认读配置文件）：
-  --replications R        重复次数，如 --replications 500
-  --sample-sizes n1 n2..  样本量列表
-  --shifts s1 s2 ..       μ 位置偏移列表
-  --workers W             并行进程数
+CLI args (all optional, defaults from the config):
+  --replications R        number of repetitions, e.g. --replications 500
+  --sample-sizes n1 n2..  list of sample sizes
+  --shifts s1 s2 ..       list of μ location shifts
+  --workers W             number of parallel processes
 
-运行:
+Run:
   D:\\Miniconda\\python.exe QTE_experiment.py
   D:\\Miniconda\\python.exe QTE_experiment.py --replications 500 --shifts 0 1 2 5 10
 """
@@ -37,9 +39,10 @@ import os
 import sys
 from pathlib import Path
 
-# 限制每个 worker 进程内部的 BLAS/OpenMP 线程数为 1，避免 ProcessPoolExecutor
-# 的多个子进程与 OpenBLAS/MKL 的多线程互相竞争，导致 CPU 利用率反而极低。
-# 必须在 import numpy 之前设置。
+# Limit the BLAS/OpenMP threads inside each worker process to 1 to avoid the multiple
+# subprocesses of ProcessPoolExecutor competing with OpenBLAS/MKL multithreading, which
+# would otherwise make the CPU utilization extremely low.
+# Must be set before importing numpy.
 os.environ.update({
     "OMP_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
@@ -50,7 +53,7 @@ os.environ.update({
 
 import numpy as np
 
-# 依赖仓库内脚本
+# import repo-local scripts
 _BASE = Path(__file__).resolve().parent
 for _sub in ("data", "estimate", "EVI", "QTE"):
     sys.path.insert(0, str(_BASE / _sub))
@@ -82,13 +85,13 @@ LABELS = {
 def estimate_qte_by_method(data_s, tau, alpha_n, beta_n,
                            beta_treated=None, beta_control=None,
                            beta_deuber_diff=None):
-    """各方法估计分位数水平 1-tau 处的 QTE（tau 为上尾概率）。
+    """Estimate the QTE at quantile level 1-tau for each method (tau is an upper-tail probability).
 
-    data_s          : 平移后的数据 dict（含 Y, D, pi_estimate）
-    beta_treated    : 可选，处理组自适应 k0 对应的 β_n（Fraga 系列使用）
-    beta_control    : 可选，对照组自适应 k0 对应的 β_n（Fraga 系列使用）
-    beta_deuber_diff: 可选，Deuber_diff 统一的 β_n（k0 = k^(2/3) 固定，缺省回退 beta_n）
-    返回 {method: qte}。
+    data_s          : the shifted data dict (containing Y, D, pi_estimate)
+    beta_treated    : optional, treated-group β_n from the adaptive k0 (used by the Fraga methods)
+    beta_control    : optional, control-group β_n from the adaptive k0 (used by the Fraga methods)
+    beta_deuber_diff: optional, uniform β_n for Deuber_diff (k0 = k^(2/3) fixed, defaults to beta_n)
+    Returns {method: qte}.
     """
     beta_dd = float(beta_deuber_diff) if beta_deuber_diff is not None else float(beta_n)
     return {
@@ -104,32 +107,35 @@ def estimate_qte_by_method(data_s, tau, alpha_n, beta_n,
 
 
 def run_experiment(cfg, model, n, shifts, replications, base_seed):
-    """对单个 (模型, 样本量) 跑 R 次重复，覆盖配置中全部 tau_n_* 水平。
+    """Run R repetitions for a single (model, sample size), covering all tau_n_* levels.
 
-    横坐标为共享位置偏移 μ（模型层外加 Y(j) = μ + 原分布）：shifts 中的值直接
-    作为 μ（设 cfg["design"]["mu"]），深拷贝配置并重新生成样本。同 seed 下
-    X、U、D 不变，仅 Y 随 μ 变。真实 QTE 平移不变（μ 两端抵消），truth_by 与 μ 无关。
+    The x-axis is the shared location shift μ (added at the model level as Y(j) = μ + original
+    distribution): the values in shifts are used directly as μ (by setting cfg["design"]["mu"]),
+    deep-copying the config and regenerating the samples. Under the same seed, X, U, D are
+    unchanged and only Y varies with μ. The true QTE is translation-invariant (μ cancels on both
+    ends), so truth_by is independent of μ.
 
-    筛方法倾向得分只依赖 X、D，与结果 Y（及 μ）无关，因此每重复只筛估计一次，
-    所有 μ 场景复用 pi_estimate。Fraga 系列使用分组自适应 k0（基于 μ=0 数据）。
+    The sieve propensity score depends only on X and D, not on the outcome Y (nor μ), so the
+    propensity score is estimated only once per repetition and reused across all μ scenarios.
+    The Fraga methods use the group-adaptive k0 (estimated from the μ=0 data).
 
-    返回 (results, truth_by, tau_vals)。
-    results : {tau_name: {μ: {method: np.ndarray}}}（R 次重复的 QTE 估计）
-    truth_by: {tau_name: 真实 QTE（理论值，μ 平移不变）}
-    tau_vals: {tau_name: 上尾概率 tau}
+    Returns (results, truth_by, tau_vals).
+    results : {tau_name: {μ: {method: np.ndarray}}} (QTE estimates over R repetitions)
+    truth_by: {tau_name: true QTE (theoretical value, translation-invariant in μ)}
+    tau_vals: {tau_name: upper-tail probability tau}
     """
     import copy
 
     levels = dict(tau_levels(cfg, n))
     tau_names = [name for name in levels if name.startswith("tau_n")]
     alpha_n = levels["alpha_n"]
-    beta_fb = fallback_beta(cfg, n)   # 兜底 β_n（自适应失败时回退；分组值优先）
-    # Deuber_diff 统一 β_n：k0 取配置公式（k0_deuber_diff_formula，默认 k^(2/3)，
-    # k = n^0.65），不随 Fraga 分组估计；β = k0 / n
+    beta_fb = fallback_beta(cfg, n)   # fallback β_n (on adaptive failure; group value takes priority)
+    # uniform β_n for Deuber_diff: k0 from the config formula (k0_deuber_diff_formula, default
+    # k^(2/3), k = n^0.65), not following the Fraga group estimate; β = k0 / n
     k0_dd = eval(cfg["design"]["k0_deuber_diff_formula"], {"n": n, "log": np.log})
     beta_deuber_diff = float(k0_dd) / n
     tau_vals = {name: levels[name] for name in tau_names}
-    # μ 平移不变：真实 QTE 与 μ 无关
+    # translation-invariant in μ: the true QTE is independent of μ
     truth_by = {name: real_qte(cfg, model, 1.0 - levels[name])["qte"]
                 for name in tau_names}
 
@@ -140,15 +146,16 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
         data0 = generate_dataset(cfg, model, n, seed)
         data0, _h_n, _info = estimate_propensity_sieve(data0)
         pi0 = data0["pi_estimate"]
-        # 分组 k0：处理组/对照组各自的 β_n（Fraga 位置不变，用 μ=0 数据估计即可）
+        # group k0: treated/control-group β_n (the Fraga location is unchanged, so estimating
+        # from the μ=0 data suffices)
         k0res = estimate_k0_by_group(cfg, data0, n)
         beta_t = k0res["beta_treated"]
         beta_c = k0res["beta_control"]
         for s in shifts:
             cfg_s = copy.deepcopy(cfg)
-            cfg_s["design"]["mu"] = s                 # 横坐标：共享位置偏移 μ
+            cfg_s["design"]["mu"] = s                 # x-axis: shared location shift μ
             data_s = generate_dataset(cfg_s, model, n, seed)
-            data_s["pi_estimate"] = pi0              # X、D 相同 → 倾向得分复用
+            data_s["pi_estimate"] = pi0              # X, D unchanged -> reuse the propensity score
             for name in tau_names:
                 est = estimate_qte_by_method(data_s, levels[name], alpha_n, beta_fb,
                                              beta_t, beta_c,
@@ -163,7 +170,7 @@ def run_experiment(cfg, model, n, shifts, replications, base_seed):
 
 
 def mse(values, truth):
-    """估计值与真值的均方误差（忽略 nan）。"""
+    """Mean squared error between the estimates and the truth (ignoring nan)."""
     v = values[np.isfinite(values)]
     if v.size == 0:
         return np.nan
@@ -171,9 +178,9 @@ def mse(values, truth):
 
 
 def formula_to_latex(formula):
-    r"""把配置里的分位数公式（Python 表达式）转成 LaTeX 分数，供 mathtext 渲染。
+    r"""Convert the quantile formula in the config (a Python expression) to a LaTeX fraction for mathtext.
 
-    示例: "5 / n" -> r"\frac{5}{n}";  "5 / (n * log(n))" -> r"\frac{5}{n\log(n)}"
+    Example: "5 / n" -> r"\frac{5}{n}";  "5 / (n * log(n))" -> r"\frac{5}{n\log(n)}"
     """
     s = formula.replace(" ", "")
     s = s.replace("log(n)", r"\log(n)")
@@ -189,11 +196,11 @@ def formula_to_latex(formula):
 
 def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                         models, sample_sizes, shifts, out_dir):
-    """一个模型两张图（估计量 / 平方误差）：行 = 样本量 n，列 = tau_n 水平。
-    子图内横轴 μ、每个 μ 处各方法一个箱线图（展示 R 次重复的估计分布）。
-    图 1 纵轴 = QTE 估计量（线性刻度，含真实 QTE 参考线）；
-    图 2 纵轴 = 平方误差 (估计 - 真实)^2（对数刻度）。
-    横纵坐标说明（location shift / 指标）放在图的最外层。"""
+    """Two figures per model (estimate / squared error): rows = sample size n, columns = tau_n levels.
+    Inside each subplot the x-axis is μ, with one boxplot per method at each μ (showing the
+    distribution of the R estimates). Figure 1's y-axis = QTE estimate (log scale, with the true
+    QTE reference line); figure 2's y-axis = squared error (estimate - truth)^2 (log scale).
+    The axis captions (location shift / metric) are placed at the outermost edges."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -210,7 +217,7 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
     width = 0.8 / n_methods
     n_tau = len(tau_names)
     n_n = len(sample_sizes)
-    # metric: (纵轴标签, 是否估计量图, 文件名后缀)
+    # metric: (y-axis label, whether it is the estimate figure, filename suffix)
     metrics = (("QTE estimate", True, "est"),
                ("Squared Error", False, "sqerr"))
     for model in models:
@@ -226,12 +233,14 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                     for i, m in enumerate(METHODS):
                         positions = x + (i - (n_methods - 1) / 2) * width
                         if is_est:
-                            # 估计量（滤掉 nan；对数刻度只能展示正值，再过滤非正值）
+                            # estimates (filter nan; log scale can only show positive values,
+                            # so also filter non-positive ones)
                             data = [results[name][s][m]
                                     [np.isfinite(results[name][s][m])] for s in shifts]
                             data = [d[d > 0] for d in data]
                         else:
-                            # 平方误差恒非负；对数刻度只能展示正值，过滤零值（及 nan）
+                            # squared error is always non-negative; log scale can only show
+                            # positive values, so filter zeros (and nan)
                             data = [((results[name][s][m] - truth_qte) ** 2)
                                     [np.isfinite(results[name][s][m])] for s in shifts]
                             data = [d[d > 0] for d in data]
@@ -241,16 +250,17 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                         for patch in bp["boxes"]:
                             patch.set_facecolor(COLORS[m])
                             patch.set_alpha(0.7)
-                        # 每个 μ 处用黑色圆点标注均值（忽略空箱）
+                        # mark the mean with a black dot at each μ (skip empty boxes)
                         means = [float(d.mean()) if d.size else np.nan for d in data]
                         ax.plot(positions, means, "ko", markersize=2)
                     ax.set_xticks(x)
                     ax.set_xticklabels([f"{s:.1f}" for s in shifts])
-                    # τ_n 标识只在第一行子图顶部显示
+                    # the τ_n label is shown only at the top of the first row of subplots
                     if r == 0:
                         ax.set_title(rf"$\tau_n = {tau_formulas[name]}$")
-                    # 两图均用对数刻度：主刻度固定为 10 的整数次幂（10 倍间距），
-                    # 关闭小刻度；估计量图加真实 QTE 参考线（需为正，负时自动不显示）
+                    # both figures use log scale: major ticks fixed to integer powers of 10
+                    # (10x spacing), minor ticks disabled; the estimate figure adds the true
+                    # QTE reference line (must be positive; skipped automatically if negative)
                     ax.set_yscale("log")
                     ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0,)))
                     ax.yaxis.set_minor_locator(NullLocator())
@@ -258,11 +268,12 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                         ax.axhline(truth_qte, color="black", linestyle="--",
                                    linewidth=1.2, alpha=0.7)
                     ax.grid(alpha=0.3, which="major", axis="y")
-                    # 行标签（样本量）：放在最右列子图的 y 轴右侧
+                    # row label (sample size): placed to the right of the y-axis of the
+                    # rightmost-column subplot
                     if c == n_tau - 1:
                         ax.set_ylabel(f"n = {n}", fontsize=11)
                         ax.yaxis.set_label_position("right")
-            # 最外层横纵坐标说明
+            # outermost axis captions
             fig.supxlabel(r"location shift $u$", fontsize=13, y=0.04)
             fig.supylabel(metric, fontsize=13)
             handles = [Patch(facecolor=COLORS[m], label=LABELS[m]) for m in METHODS]
@@ -271,13 +282,13 @@ def plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                                           label="true QTE"))
             fig.legend(handles=handles, loc="upper center", ncol=len(handles),
                        fontsize=10, frameon=False)
-            # suptitle 下移，避免与顶部图例重合
+            # move the suptitle down to avoid overlapping the top legend
             fig.suptitle(model, fontsize=13, y=0.93)
             fig.tight_layout(rect=(0, 0.04, 1, 0.94))
 
             out_path = out_dir / f"QTE_shift_{suffix}_{model}.png"
             fig.savefig(out_path, dpi=150)
-            print(f"Line plot saved: {out_path}")
+            print(f"Boxplot saved: {out_path}")
             plt.close(fig)
 
 
@@ -305,28 +316,30 @@ if __name__ == "__main__":
     workers = args.workers if args.workers is not None else int(cfg["design"].get("num_workers", 0))
     models = list(cfg["outcome_models"])
 
-    # 目标分位数水平：配置中全部 tau_n_*（上尾概率，分位数水平 1-tau_n）
+    # target quantile levels: all tau_n_* in the config (upper-tail probabilities,
+    # quantile level 1-tau_n)
     tau_names = [name for name, _ in tau_levels(cfg, sample_sizes[0])
                  if name.startswith("tau_n")]
 
     print("=" * 72)
-    print("QTE 估计量位置敏感性 Monte Carlo 实验")
-    print("  （并行粒度：模型 x 样本量组合，每个组合一个进程）")
-    print(f"  模型: {models}")
-    print(f"  样本量列表: {sample_sizes}")
-    print(f"  μ 位置偏移列表: {shifts}")
-    print(f"  目标分位数水平: {tau_names}（对应分位数水平 1-tau_n）")
-    print(f"  重复次数 R = {replications}")
-    print(f"  对比方法: {LABELS}")
+    print("QTE estimator location-sensitivity Monte Carlo experiment")
+    print("  (parallel granularity: model x sample size, one process per combination)")
+    print(f"  models: {models}")
+    print(f"  sample sizes: {sample_sizes}")
+    print(f"  μ location shifts: {shifts}")
+    print(f"  target quantile levels: {tau_names} (corresponding quantile level 1-tau_n)")
+    print(f"  repetitions R = {replications}")
+    print(f"  compared methods: {LABELS}")
     print("=" * 72)
 
-    # 任务 = 每个 (模型, 样本量) 组合一个进程，进程内对所有 shift 复用倾向得分
+    # a task = one process per (model, sample size) combination; within a process the
+    # propensity score is reused across all shifts
     tasks = [(model, n) for model in models for n in sample_sizes]
     if workers > 0:
         max_workers = min(len(tasks), workers)
-    else:  # 自动：min(任务数, CPU 逻辑核数)
+    else:  # auto: min(number of tasks, number of logical CPU cores)
         max_workers = min(len(tasks), os.cpu_count() or 1)
-    print(f"  任务数: {len(tasks)}，并行进程数: {max_workers}（配置 num_workers={workers}）")
+    print(f"  tasks: {len(tasks)}, parallel processes: {max_workers} (config num_workers={workers})")
 
     all_results = {model: {n: None for n in sample_sizes} for model in models}
     from tqdm import tqdm
@@ -344,12 +357,12 @@ if __name__ == "__main__":
                 try:
                     all_results[model][n] = fut.result()
                 except Exception as e:
-                    print(f"[模型 {model}, n={n}] 失败: {e}")
+                    print(f"[model {model}, n={n}] failed: {e}")
                     raise
                 pbar.set_postfix_str(f"{model} n={n}")
                 pbar.update(1)
 
-    # 汇总统计：构造 truth_by 供绘图使用（不打印 MSE）
+    # aggregate statistics: build truth_by for plotting (MSE is not printed)
     truth_by = {model: {n: {name: None for name in tau_names} for n in sample_sizes}
                 for model in models}
     for model in models:
@@ -358,11 +371,11 @@ if __name__ == "__main__":
             for name in tau_names:
                 truth_by[model][n][name] = (tau_vals[name], truth[name])
 
-    # 箱线图（每个模型 x 样本量一张，每张包含全部 tau_n 水平子图）
+    # boxplots (one per model x sample size, each containing subplots for all tau_n levels)
     tau_formulas = {q["name"]: q["formula"] for q in cfg["design"]["quantile_levels"]
                     if q["name"].startswith("tau_n")}
     out_dir = Path(__file__).resolve().parent / "results"
     plot_shift_boxplots(all_results, truth_by, tau_names, tau_formulas,
                         models, sample_sizes, shifts, out_dir)
 
-    print("\n实验结束。")
+    print("\nExperiment finished.")

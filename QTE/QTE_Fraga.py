@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
-"""外推法（Weissman 型）极端分位数处理效应 (QTE) 估计量（Fraga 极值指数版）。
+"""Extrapolation (Weissman-type) extreme quantile treatment effect (QTE) estimator (Fraga EVI version).
 
-锚点: 中间水平分位数 q̂_j(1-α_n)（IPW 加权经验分位数，α_n 来自配置，
-     公式 α_n = k/n，k = n^{0.65}，对应分位数水平 1-α_n）。
-极值指数: Candal–Fraga 估计量 γ̂_j^F（EVI/causal_fraga.py 的
-     estimate_evi_causal_fraga，内部还需辅助水平 β_n 构造阈值差）。
+Anchor: intermediate-level quantile q̂_j(1-α_n) (IPW-weighted empirical quantile, α_n from the
+     config, formula α_n = k/n, k = n^{0.65}, corresponding to quantile level 1-α_n).
+Extreme value index: Candal–Fraga estimator γ̂_j^F (estimate_evi_causal_fraga in
+     EVI/causal_fraga.py, which internally needs an auxiliary level β_n to construct the
+     threshold difference).
 
-对更极端的尾部水平 τ < α_n（对应分位数水平 1-τ）用 Weissman 型外推:
+For more extreme tail levels τ < α_n (corresponding to quantile level 1-τ), use Weissman-type
+extrapolation:
     q̂_j^ext(1-τ) = q̂_j(1-α_n) · (α_n / τ)^{γ̂_j^F}
     QTE^ext(1-τ)  = q̂_1^ext(1-τ) - q̂_0^ext(1-τ)
 
-原理: 若尾部分布近似 Pareto，则超过大阈值 u 的对数超出量服从指数分布，
-其尺度由 EVI γ 刻画；q̂(1-α_n) 随水平按幂律 (α_n/τ)^γ 向外推移。
+Principle: if the tail distribution is approximately Pareto, the log-exceedances above a
+large threshold u follow an exponential distribution whose scale is characterized by the EVI
+γ; q̂(1-α_n) is pushed outward by the level according to the power law (α_n/τ)^γ.
 
-输入: 含 Y, D, pi_estimate 字段的 dict（一维数组）
-输出: 目标极端水平 τ（分位数水平 1-τ）下外推的处理组/对照组分位数及 QTE
+Input:  dict with fields Y, D, pi_estimate (1-D arrays)
+Output: extrapolated treated/control-group quantiles and the QTE at the target extreme level
+        τ (quantile level 1-τ)
 """
 from pathlib import Path
 import sys
@@ -22,13 +26,11 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "EVI"))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from causal_fraga import estimate_evi_causal_fraga  # noqa: E402
-from estimate_k0 import fallback_beta  # noqa: E402
 
 
 def weighted_quantile(Y, weights, tau):
-    """加权经验分位数：找 q 使 cum_w(q)/total_w >= tau 的最小 Y 排序值。"""
+    """Weighted empirical quantile: the smallest sorted Y value with cum_w(q)/total_w >= tau."""
     Y = np.asarray(Y).ravel()
     weights = np.asarray(weights, dtype=float).ravel()
     if Y.size == 0:
@@ -47,41 +49,40 @@ def weighted_quantile(Y, weights, tau):
     return float(Y_sorted[idx])
 
 
-def extrapolate_quantile(q_anchor, anchor, tau_target, gamma):
-    """Weissman 型外推: q̂(1-τ) ≈ q̂(1-anchor) · (anchor/τ)^γ。"""
-    return q_anchor * (anchor / tau_target) ** gamma
+def extrapolate_quantile(q_anchor, anchor_level, tau_target, gamma):
+    """Weissman-type extrapolation: q̂(1-τ) ≈ q̂(1-anchor) · (anchor/τ)^γ."""
+    return q_anchor * (anchor_level / tau_target) ** gamma
 
 
-def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=None,
-                                     beta_treated=None, beta_control=None):
-    """外推法估计极端分位数处理效应（Fraga 极值指数版，锚点 α_n）。
+def estimate_qte_extrapolation_fraga(data, alpha_n, tau_target, beta_n=None,
+                                     beta_treated=None, beta_control=None, gamma=None):
+    """Estimate the extreme quantile treatment effect by extrapolation (Fraga EVI version).
 
-    data          : dict，需含 Y, D, pi_estimate 三个一维字段
-    beta_n        : Fraga 估计量的辅助中间水平（构造阈值差，需 beta_n < alpha_n）
-    alpha_n       : 锚点中间水平（上尾概率），锚点分位数为 q̂_j(1-α_n)
-    tau_target    : 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
-                    一般用于 tau_target < alpha_n（向比锚点更极端的尾部外推）
-    gamma         : 可选的极值指数 dict {gamma_treated, gamma_control}；
-                    缺省时用 Candal–Fraga 估计量（estimate_evi_causal_fraga）计算
-    beta_treated  : 可选，处理组各自的 β_n（分组 k0 时传入）
-    beta_control  : 可选，对照组各自的 β_n（分组 k0 时传入）
+    data      : dict containing Y, D, pi_estimate (three 1-D fields)
+    alpha_n   : intermediate anchor level (upper-tail probability); the anchor quantile is q̂_j(1-α_n)
+    tau_target: target extreme level (upper-tail probability), scalar or array, must be positive
+                (tau > 0); usually used with tau_target < alpha_n
+    beta_n    : auxiliary level (upper-tail probability) for the Fraga EVI
+    beta_treated/beta_control: optional group-specific β_n (for the group-adaptive k0 estimate)
+    gamma     : optional extreme value index dict {gamma_treated, gamma_control};
+                by default computed with the Candal–Fraga estimator
 
-    返回 dict {beta_n, alpha_n, tau, q_anchor_treated, q_anchor_control,
-              gamma_treated, gamma_control,
-              q_treated_ext, q_control_ext, qte_ext}。
-    tau 为数组时 q_*_ext 与 qte_ext 也返回数组。
+    Returns dict {alpha_n, beta_n, tau, q_anchor_treated, q_anchor_control,
+              gamma_treated, gamma_control, q_treated_ext, q_control_ext, qte_ext}.
+    When tau is an array, q_*_ext and qte_ext are also arrays.
     """
     Y = np.asarray(data["Y"]).ravel()
     D = np.asarray(data["D"]).ravel()
     pi = np.asarray(data["pi_estimate"]).ravel()
+    n = Y.size
     taus = np.atleast_1d(np.asarray(tau_target, dtype=float))
     if np.any(taus <= 0):
-        raise ValueError("tau_target 需为正（tau > 0）")
+        raise ValueError("tau_target must be positive (tau > 0)")
 
     eps = 1e-6
     pi_c = np.clip(pi, eps, 1.0 - eps)
 
-    # 锚点中间水平分位数 q̂_j(1-α_n)（IPW 加权）
+    # intermediate anchor-level quantile q̂_j(1-α_n) (IPW-weighted)
     mask_t = (D == 1)
     mask_c = (D == 0)
     w_t = 1.0 / pi_c[mask_t]
@@ -89,10 +90,11 @@ def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=No
     q_anchor_t = weighted_quantile(Y[mask_t], w_t, 1.0 - alpha_n)
     q_anchor_c = weighted_quantile(Y[mask_c], w_c, 1.0 - alpha_n)
 
-    # 极值指数：缺省用 Candal–Fraga（可分组 β_n）
+    # extreme value index: use Candal–Fraga by default (with group-specific β_n)
     if gamma is None:
         fraga = estimate_evi_causal_fraga(data, beta_n, alpha_n,
-                                          beta_treated, beta_control)
+                                          beta_treated=beta_treated,
+                                          beta_control=beta_control)
         gamma_t = fraga["gamma_treated"]
         gamma_c = fraga["gamma_control"]
     else:
@@ -109,8 +111,8 @@ def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=No
         return arr[0] if arr.size == 1 else arr
 
     return {
-        "beta_n": float(beta_n),
         "alpha_n": float(alpha_n),
+        "beta_n": float(beta_n) if beta_n is not None else None,
         "tau": _scalar_or_array(taus),
         "q_anchor_treated": float(q_anchor_t),
         "q_anchor_control": float(q_anchor_c),
@@ -125,18 +127,21 @@ def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=No
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "estimate"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from data_generation import load_config, generate_dataset, tau_levels
     from estimate_propensity_sieve import estimate_propensity_sieve
+    from estimate_k0 import fallback_beta
 
     cfg = load_config()
     seed = cfg["experiment"]["random_seed"]
     first_model = list(cfg["outcome_models"])[0]
     first_n = cfg["design"]["sample_sizes"][0]
 
-    # 锚点水平 β_n 与辅助水平 α_n 取自配置；目标极端水平 τ 取自配置中所有 tau_n_* 水平
+    # anchor level α_n and auxiliary level β_n from the config; target extreme level τ
+    # from all tau_n_* levels in the config
     levels = dict(tau_levels(cfg, first_n))
     alpha_n = levels["alpha_n"]
-    beta_n = fallback_beta(cfg, first_n)   # 兜底 β_n（辅助水平）
+    beta_n = fallback_beta(cfg, first_n)   # fallback β_n (auxiliary level)
     target_levels = [(name, levels[name]) for name in levels if name.startswith("tau_n")]
     target_taus = [t for _, t in target_levels]
 
@@ -144,23 +149,22 @@ if __name__ == "__main__":
     data, h_n, info = estimate_propensity_sieve(data)
 
     print("=" * 92)
-    print(f"[测试] 模型={first_model}, n={first_n}, h_n={h_n}")
-    print(f"  锚点水平 alpha_n = {alpha_n:.4e}, 分位数水平 1-alpha_n = {1-alpha_n:.6f}")
-    print(f"  Fraga 辅助水平 beta_n = {beta_n:.4e}")
+    print(f"[test] model={first_model}, n={first_n}, h_n={h_n}")
+    print(f"  anchor level alpha_n = {alpha_n:.4e}, beta_n = {beta_n:.4e}")
 
-    res = estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, target_taus)
-    print(f"  锚点分位数: q1(1-a)={res['q_anchor_treated']:12.3f}, "
+    res = estimate_qte_extrapolation_fraga(data, alpha_n, target_taus, beta_n=beta_n)
+    print(f"  anchor quantile: q1(1-a)={res['q_anchor_treated']:12.3f}, "
           f"q0(1-a)={res['q_anchor_control']:12.3f}")
-    print(f"  Fraga EVI:  gamma_1^F={res['gamma_treated']:.4f}, "
+    print(f"  Fraga EVI:   gamma_1^F={res['gamma_treated']:.4f}, "
           f"gamma_0^F={res['gamma_control']:.4f}")
 
-    print("\n  [Weissman 外推 QTE (Fraga)]（目标水平取自配置文件，显示 1-tau 对应的分位数水平）")
-    print(f"  {'name':<12}{'tau(上尾)':<14}{'1-tau':<16}"
+    print("\n  [Weissman extrapolation QTE (Fraga)] (target levels from the config, showing the quantile level 1-tau)")
+    print(f"  {'name':<12}{'tau (upper tail)':<16}{'1-tau':<16}"
           f"{'q_treated':>16}{'q_control':>16}{'QTE':>16}")
-    print(f"  {'-' * 90}")
+    print(f"  {'-' * 92}")
     for i, (name, t) in enumerate(target_levels):
         q_level = 1.0 - t
-        print(f"  {name:<12}{t:<14.3e}{q_level:<16.6f}"
+        print(f"  {name:<12}{t:<16.3e}{q_level:<16.6f}"
               f"{np.asarray(res['q_treated_ext'])[i]:16.4f}"
               f"{np.asarray(res['q_control_ext'])[i]:16.4f}"
               f"{np.asarray(res['qte_ext'])[i]:16.4f}")

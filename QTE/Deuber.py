@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
-"""外推法（Weissman 型）极端分位数处理效应 (QTE) 估计量。
+"""Extrapolation (Weissman-type) extreme quantile treatment effect (QTE) estimator.
 
-锚点: 中间水平分位数 q̂_j(1-α_n)（IPW 加权经验分位数，α_n 来自配置，
-     公式 α_n = n^{-0.35}，对应分位数水平 1-α_n）。
-极值指数: Causal Hill 估计量 γ̂_j^H（EVI/causal_hill.py 的 estimate_evi_causal_hill）。
+Anchor: intermediate-level quantile q̂_j(1-α_n) (IPW-weighted empirical quantile, α_n
+     from the config, formula α_n = n^{-0.35}, corresponding to quantile level 1-α_n).
+Extreme value index: Causal Hill estimator γ̂_j^H (estimate_evi_causal_hill in EVI/causal_hill.py).
 
-对更极端的尾部水平 τ < α_n（对应分位数水平 1-τ）用 Weissman 型外推:
+For more extreme tail levels τ < α_n (corresponding to quantile level 1-τ), use Weissman-type
+extrapolation:
     q̂_j^ext(1-τ) = q̂_j(1-α_n) · (α_n / τ)^{γ̂_j^H}
     QTE^ext(1-τ)  = q̂_1^ext(1-τ) - q̂_0^ext(1-τ)
 
-原理: 若尾部分布近似 Pareto，则超过大阈值 u 的对数超出量服从指数分布，
-其尺度由 EVI γ 刻画；q̂(1-α_n) 随水平按幂律 (α_n/τ)^γ 向外推移。
+Principle: if the tail distribution is approximately Pareto, the log-exceedances above a
+large threshold u follow an exponential distribution whose scale is characterized by the EVI
+γ; q̂(1-α_n) is pushed outward by the level according to the power law (α_n/τ)^γ.
 
-输入: 含 Y, D, pi_estimate 字段的 dict（一维数组）
-输出: 目标极端水平 τ（分位数水平 1-τ）下外推的处理组/对照组分位数及 QTE
+Input:  dict with fields Y, D, pi_estimate (1-D arrays)
+Output: extrapolated treated/control-group quantiles and the QTE at the target extreme level
+        τ (quantile level 1-τ)
 """
 from pathlib import Path
 import sys
@@ -25,7 +28,7 @@ from causal_hill import estimate_evi_causal_hill  # noqa: E402
 
 
 def weighted_quantile(Y, weights, tau):
-    """加权经验分位数：找 q 使 cum_w(q)/total_w >= tau 的最小 Y 排序值。"""
+    """Weighted empirical quantile: the smallest sorted Y value with cum_w(q)/total_w >= tau."""
     Y = np.asarray(Y).ravel()
     weights = np.asarray(weights, dtype=float).ravel()
     if Y.size == 0:
@@ -45,24 +48,25 @@ def weighted_quantile(Y, weights, tau):
 
 
 def extrapolate_quantile(q_anchor, alpha_n, tau_target, gamma):
-    """Weissman 型外推: q̂(1-τ) ≈ q̂(1-α_n) · (α_n/τ)^γ。"""
+    """Weissman-type extrapolation: q̂(1-τ) ≈ q̂(1-α_n) · (α_n/τ)^γ."""
     return q_anchor * (alpha_n / tau_target) ** gamma
 
 
 def estimate_qte_extrapolation(data, alpha_n, tau_target, gamma=None):
-    """外推法估计极端分位数处理效应。
+    """Estimate the extreme quantile treatment effect by extrapolation.
 
-    data      : dict，需含 Y, D, pi_estimate 三个一维字段
-    alpha_n   : 锚点中间水平（上尾概率），锚点分位数为 q̂_j(1-α_n)
-    tau_target: 目标极端水平（上尾概率），标量或数组，需为正（tau > 0）；
-                一般用于 tau_target < alpha_n（向比锚点更极端的尾部外推）
-    gamma     : 可选的极值指数 dict {gamma_treated, gamma_control}；
-                缺省时用 Causal Hill 估计量（estimate_evi_causal_hill）计算
+    data      : dict containing Y, D, pi_estimate (three 1-D fields)
+    alpha_n   : intermediate anchor level (upper-tail probability); the anchor quantile is q̂_j(1-α_n)
+    tau_target: target extreme level (upper-tail probability), scalar or array, must be positive
+                (tau > 0); usually used with tau_target < alpha_n (extrapolating to a more extreme
+                tail than the anchor)
+    gamma     : optional extreme value index dict {gamma_treated, gamma_control};
+                by default computed with the Causal Hill estimator (estimate_evi_causal_hill)
 
-    返回 dict {alpha_n, tau, q_anchor_treated, q_anchor_control,
+    Returns dict {alpha_n, tau, q_anchor_treated, q_anchor_control,
               gamma_treated, gamma_control,
-              q_treated_ext, q_control_ext, qte_ext}。
-    tau 为数组时 q_*_ext 与 qte_ext 也返回数组。
+              q_treated_ext, q_control_ext, qte_ext}.
+    When tau is an array, q_*_ext and qte_ext are also arrays.
     """
     Y = np.asarray(data["Y"]).ravel()
     D = np.asarray(data["D"]).ravel()
@@ -70,12 +74,12 @@ def estimate_qte_extrapolation(data, alpha_n, tau_target, gamma=None):
     n = Y.size
     taus = np.atleast_1d(np.asarray(tau_target, dtype=float))
     if np.any(taus <= 0):
-        raise ValueError("tau_target 需为正（tau > 0）")
+        raise ValueError("tau_target must be positive (tau > 0)")
 
     eps = 1e-6
     pi_c = np.clip(pi, eps, 1.0 - eps)
 
-    # 锚点中间水平分位数 q̂_j(1-α_n)（IPW 加权）
+    # intermediate anchor-level quantile q̂_j(1-α_n) (IPW-weighted)
     mask_t = (D == 1)
     mask_c = (D == 0)
     w_t = 1.0 / pi_c[mask_t]
@@ -83,7 +87,7 @@ def estimate_qte_extrapolation(data, alpha_n, tau_target, gamma=None):
     q_anchor_t = weighted_quantile(Y[mask_t], w_t, 1.0 - alpha_n)
     q_anchor_c = weighted_quantile(Y[mask_c], w_c, 1.0 - alpha_n)
 
-    # 极值指数：缺省用 Causal Hill
+    # extreme value index: use Causal Hill by default
     if gamma is None:
         hill = estimate_evi_causal_hill(data, alpha_n)
         gamma_t = hill["gamma_treated"]
@@ -125,7 +129,7 @@ if __name__ == "__main__":
     first_model = list(cfg["outcome_models"])[0]
     first_n = cfg["design"]["sample_sizes"][0]
 
-    # 锚点水平 α_n 取自配置；目标极端水平 τ 取自配置中所有 tau_n_* 水平
+    # anchor level α_n from the config; target extreme level τ from all tau_n_* levels in the config
     levels = dict(tau_levels(cfg, first_n))
     alpha_n = levels["alpha_n"]
     target_levels = [(name, levels[name]) for name in levels if name.startswith("tau_n")]
@@ -135,22 +139,22 @@ if __name__ == "__main__":
     data, h_n, info = estimate_propensity_sieve(data)
 
     print("=" * 92)
-    print(f"[测试] 模型={first_model}, n={first_n}, h_n={h_n}")
-    print(f"  锚点水平 alpha_n = {alpha_n:.4e}, 分位数水平 1-alpha_n = {1-alpha_n:.6f}")
+    print(f"[test] model={first_model}, n={first_n}, h_n={h_n}")
+    print(f"  anchor level alpha_n = {alpha_n:.4e}, quantile level 1-alpha_n = {1-alpha_n:.6f}")
 
     res = estimate_qte_extrapolation(data, alpha_n, target_taus)
-    print(f"  锚点分位数: q1(1-a)={res['q_anchor_treated']:12.3f}, "
+    print(f"  anchor quantile: q1(1-a)={res['q_anchor_treated']:12.3f}, "
           f"q0(1-a)={res['q_anchor_control']:12.3f}")
     print(f"  Hill EVI:   gamma_1^H={res['gamma_treated']:.4f}, "
           f"gamma_0^H={res['gamma_control']:.4f}")
 
-    print("\n  [Weissman 外推 QTE]（目标水平取自配置文件，显示 1-tau 对应的分位数水平）")
-    print(f"  {'name':<12}{'tau(上尾)':<14}{'1-tau':<16}"
+    print("\n  [Weissman extrapolation QTE] (target levels from the config, showing the quantile level 1-tau)")
+    print(f"  {'name':<12}{'tau (upper tail)':<16}{'1-tau':<16}"
           f"{'q_treated':>16}{'q_control':>16}{'QTE':>16}")
-    print(f"  {'-' * 90}")
+    print(f"  {'-' * 92}")
     for i, (name, t) in enumerate(target_levels):
         q_level = 1.0 - t
-        print(f"  {name:<12}{t:<14.3e}{q_level:<16.6f}"
+        print(f"  {name:<12}{t:<16.3e}{q_level:<16.6f}"
               f"{np.asarray(res['q_treated_ext'])[i]:16.4f}"
               f"{np.asarray(res['q_control_ext'])[i]:16.4f}"
               f"{np.asarray(res['qte_ext'])[i]:16.4f}")
