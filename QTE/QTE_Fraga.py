@@ -54,20 +54,23 @@ def extrapolate_quantile(q_anchor, anchor_level, tau_target, gamma):
     return q_anchor * (anchor_level / tau_target) ** gamma
 
 
-def estimate_qte_extrapolation_fraga(data, alpha_n, tau_target, beta_n=None,
-                                     beta_treated=None, beta_control=None, gamma=None):
+def estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, tau_target, gamma=None,
+                                     beta_treated=None, beta_control=None):
     """Estimate the extreme quantile treatment effect by extrapolation (Fraga EVI version).
 
     data      : dict containing Y, D, pi_estimate (three 1-D fields)
+    beta_n    : auxiliary intermediate level for the Fraga estimator (used to build the threshold
+                difference; requires beta_n < alpha_n)
     alpha_n   : intermediate anchor level (upper-tail probability); the anchor quantile is q̂_j(1-α_n)
     tau_target: target extreme level (upper-tail probability), scalar or array, must be positive
-                (tau > 0); usually used with tau_target < alpha_n
-    beta_n    : auxiliary level (upper-tail probability) for the Fraga EVI
-    beta_treated/beta_control: optional group-specific β_n (for the group-adaptive k0 estimate)
+                (tau > 0); usually used with tau_target < alpha_n (extrapolating to a more extreme
+                tail than the anchor)
     gamma     : optional extreme value index dict {gamma_treated, gamma_control};
-                by default computed with the Candal–Fraga estimator
+                by default computed with the Candal–Fraga estimator (estimate_evi_causal_fraga)
+    beta_treated  : optional, treated-group β_n (passed in for group-specific k0)
+    beta_control  : optional, control-group β_n (passed in for group-specific k0)
 
-    Returns dict {alpha_n, beta_n, tau, q_anchor_treated, q_anchor_control,
+    Returns dict {beta_n, alpha_n, tau, q_anchor_treated, q_anchor_control,
               gamma_treated, gamma_control, q_treated_ext, q_control_ext, qte_ext}.
     When tau is an array, q_*_ext and qte_ext are also arrays.
     """
@@ -111,8 +114,8 @@ def estimate_qte_extrapolation_fraga(data, alpha_n, tau_target, beta_n=None,
         return arr[0] if arr.size == 1 else arr
 
     return {
+        "beta_n": float(beta_n),
         "alpha_n": float(alpha_n),
-        "beta_n": float(beta_n) if beta_n is not None else None,
         "tau": _scalar_or_array(taus),
         "q_anchor_treated": float(q_anchor_t),
         "q_anchor_control": float(q_anchor_c),
@@ -152,7 +155,7 @@ if __name__ == "__main__":
     print(f"[test] model={first_model}, n={first_n}, h_n={h_n}")
     print(f"  anchor level alpha_n = {alpha_n:.4e}, beta_n = {beta_n:.4e}")
 
-    res = estimate_qte_extrapolation_fraga(data, alpha_n, target_taus, beta_n=beta_n)
+    res = estimate_qte_extrapolation_fraga(data, beta_n, alpha_n, target_taus)
     print(f"  anchor quantile: q1(1-a)={res['q_anchor_treated']:12.3f}, "
           f"q0(1-a)={res['q_anchor_control']:12.3f}")
     print(f"  Fraga EVI:   gamma_1^F={res['gamma_treated']:.4f}, "

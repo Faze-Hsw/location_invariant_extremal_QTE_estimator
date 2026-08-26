@@ -61,17 +61,17 @@ def difference_extrapolate(q_alpha, q_beta, alpha_n, beta_n, tau_target, gamma):
     return q_alpha + (q_beta - q_alpha) * slope
 
 
-def estimate_qte_diff(data, alpha_n, beta_n, tau_target,
-                      beta_treated=None, beta_control=None, gamma=None):
+def estimate_qte_diff(data, alpha_n, beta_n, tau_target, gamma=None,
+                      beta_treated=None, beta_control=None):
     """Estimate the extreme quantile treatment effect by difference extrapolation.
 
     data      : dict containing Y, D, pi_estimate (three 1-D fields)
     alpha_n   : first anchor level (upper-tail probability), anchor quantile q̂_j(1-α_n)
     beta_n    : second anchor level (upper-tail probability), anchor quantile q̂_j(1-β_n)
     tau_target: target extreme level (upper-tail probability), scalar or array, must be positive
-    beta_treated/beta_control: optional group-specific β_n (for the group-adaptive Fraga estimate)
     gamma     : optional extreme value index dict {gamma_treated, gamma_control};
                 by default computed with the Causal Hill estimator
+    beta_treated/beta_control: optional group-specific β_n (for the group-adaptive Fraga estimate)
 
     Returns dict {alpha_n, beta_n, tau, q_anchor_alpha_treated, q_anchor_beta_treated,
               q_anchor_alpha_control, q_anchor_beta_control, gamma_treated, gamma_control,
