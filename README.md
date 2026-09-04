@@ -4,7 +4,7 @@
   <a href="https://arxiv.org/abs/2609.04018"><img src="https://img.shields.io/badge/arXiv-2609.04018-b31b1b.svg" alt="arXiv"></a>
 </p>
 
-Simulation code accompanying the paper **《A location-invariant estimator of extremal quantile treatment effects for heavy-tailed distributions》** ([arXiv:2609.04018](https://arxiv.org/abs/2609.04018)).
+Simulation code accompanying the paper **《A Location-Invariant Estimator of Extremal Quantile Treatment Effects for Heavy-Tailed Distributions》**.
 
 The paper addresses estimation of extremal quantile treatment effects (QTE) under heavy-tailed potential outcomes, with two contributions: (1) the location-invariant Fraga extreme value index (EVI) estimator is adapted to the causal setting via inverse propensity score weighting (the Causal Fraga estimator); (2) the original multiplicative extrapolation formula is replaced by a difference-based scheme, under which the location parameter cancels when quantile differences are taken. The resulting QTE estimator is location invariant, and the paper establishes its consistency, asymptotic normality, and a consistent variance estimator (valid confidence intervals).
 
